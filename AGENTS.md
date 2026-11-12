@@ -34,7 +34,7 @@ cd android && ./build.sh
 
 `build.sh` runs the Kotlin unit tests and builds the signed APK. It needs the toolchain in `~/.local/android-toolchain` and the key in `~/.config/doppler/` (`keystore.properties` and `release.jks`; losing the key means no more in-place updates). `android.properties` there sets the default hub and phone name that get baked into the build.
 
-To try the player without touching a real session, run a throwaway hub (`bin/doppler serve FOLDER --port 4699`) and a player with its own `XDG_CONFIG_HOME` and `XDG_STATE_HOME`, plus `daemon --mpv=--ao=null`.
+To try the player without touching a real session, run a throwaway hub with its own `XDG_DATA_HOME` and `XDG_CACHE_HOME` (`bin/doppler serve FOLDER --port 4699`; without them it reads and writes the real hub's `hub.json`), and a player with its own `XDG_CONFIG_HOME` and `XDG_STATE_HOME`, plus `daemon --mpv=--ao=null`. Release builds default to the real hub, so point a test phone or emulator at the throwaway one in Settings before pressing play.
 
 ## Ship
 

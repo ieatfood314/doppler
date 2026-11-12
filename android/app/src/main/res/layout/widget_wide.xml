@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:padding="4dp"
+    android:background="@drawable/widget_bg">
+    <FrameLayout
+        android:id="@+id/slot1"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:background="@drawable/widget_press"
+        android:contentDescription="Play playlist 1">
+        <ImageView
+            android:id="@+id/ring1"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ring_1"
+            android:visibility="invisible"
+            android:importantForAccessibility="no" />
+        <ImageView
+            android:id="@+id/glyph1"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_margin="10dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/glyph_1"
+            android:importantForAccessibility="no" />
+    </FrameLayout>
+    <FrameLayout
+        android:id="@+id/slot2"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:background="@drawable/widget_press"
+        android:contentDescription="Play playlist 2">
+        <ImageView
+            android:id="@+id/ring2"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ring_2"
+            android:visibility="invisible"
+            android:importantForAccessibility="no" />
+        <ImageView
+            android:id="@+id/glyph2"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_margin="10dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/glyph_2"
+            android:importantForAccessibility="no" />
+    </FrameLayout>
+</LinearLayout>

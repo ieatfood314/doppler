@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Doppler
+GenericName=Music
+Comment=Two playlists, one keypress, the same place on every device
+Exec=@BIN@ ui
+Icon=doppler
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupWMClass=doppler

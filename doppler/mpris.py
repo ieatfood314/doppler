@@ -23,7 +23,13 @@ class Mpris(dbus.service.Object):
     def __init__(self, player):
         dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
         bus = dbus.SessionBus()
-        self.bus_name = dbus.service.BusName("org.mpris.MediaPlayer2.doppler", bus)
+        # A second player (a test run, or one stuck on its way out) may already hold the name. Queueing
+        # behind it would leave the media keys and "pause the music" tools talking to the wrong one, so
+        # take an instance name as MPRIS allows; playerctl and the desktop list both.
+        try:
+            self.bus_name = dbus.service.BusName("org.mpris.MediaPlayer2.doppler", bus, do_not_queue=True)
+        except dbus.exceptions.NameExistsException:
+            self.bus_name = dbus.service.BusName(f"org.mpris.MediaPlayer2.doppler.instance{os.getpid()}", bus)
         super().__init__(bus, PATH)
         self.player = player
         self.state = {"playing": False, "loaded": False, "track": None, "position": 0.0, "index": 0}

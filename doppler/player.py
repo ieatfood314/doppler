@@ -90,7 +90,9 @@ class Player:
         self.runtime_dir = runtime_dir
         os.makedirs(state_dir, exist_ok=True)
         os.makedirs(runtime_dir, exist_ok=True)
-        self.events: queue.Queue = queue.Queue()
+        # SimpleQueue because the SIGTERM handler puts into it on the main thread, which may be holding a
+        # Queue's lock right then; a Queue deadlocks there, a SimpleQueue's put is safe in a signal handler.
+        self.events: queue.SimpleQueue = queue.SimpleQueue()
         self.mpv = Mpv(os.path.join(runtime_dir, "mpv.sock"), lambda e: self.events.put(("mpv", e)), mpv_extra)
         self.library: dict[str, dict] = {}
         self.library_rev = ""

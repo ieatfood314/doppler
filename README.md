@@ -17,7 +17,7 @@ Press **1** and playlist 1 plays, shuffled. Press **2** and playlist 2 plays. Pr
 
 - **The hub** runs on one always-on machine that has the music. It indexes the library, serves the files and cover art, and keeps each playlist's shuffle and position. Python 3, nothing else (mutagen or ffprobe for tags, ffmpeg for art thumbnails, if present).
 - **The player** on a Linux computer is a small daemon around [mpv](https://mpv.io). It plays the computer's own copy of the music if there is one, and streams from the hub otherwise. It keeps playing if the hub goes away, and catches up later.
-- **The phone app** (Android 10+) plays the phone's own copy of a track when it has one, and streams it otherwise. It keeps playing after you swipe it away, and has 2×1 and 1×2 home-screen widgets with a 1 and a 2.
+- **The phone app** (Android 10+) plays the phone's own copy of a track when it has one, and streams it otherwise. It keeps playing after you swipe it away, and has 2×1 and 1×2 home-screen widgets with a 1 and a 2. Tap one to play it, and the widget shows the cover, title and artist with a small red 1 or 2 in the corner. Tap the middle to pause, the left or right edge to go back or skip, and the number to open its playlist. Pausing brings back the 1 and 2.
 
 Whichever device you last pressed play on is the one playing. The others go quiet.
 

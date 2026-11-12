@@ -3,58 +3,202 @@ package ca.heeney.doppler
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.BitmapShader
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Shader
+import android.media.MediaMetadataRetriever
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.view.View
 import android.widget.RemoteViews
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.Executors
 
-/** The 2x1 and 1x2 widgets: a 1 and a 2. The one that is playing glows its colour. */
+/** The 2x1 and 1x2 widgets. Stopped, they show the 1 and the 2, and a tap plays that one. While the phone
+ * plays they show the cover, title and artist with the playing number small and red in the corner: a tap
+ * in the middle pauses, the left and right edges go back and skip, and the number opens its playlist.
+ * Pausing, from anywhere, brings back the 1 and 2. (A widget only gets taps: the launcher keeps swipes
+ * and press-and-hold.) Colours come from resources, so the launcher picks day or night. */
 object Widgets {
-    const val RED = 0xFFFF5A3C.toInt()
-    const val BLUE = 0xFF5B8CFF.toInt()
-    const val IDLE = 0xFFB9B4D6.toInt()
-    private var shown: String? = "unset"
+    /** What a playing widget shows. */
+    private data class Live(val playlist: String, val slot: String?, val track: String?, val title: String, val artist: String)
 
-    fun update(context: Context, current: String?, playing: Boolean, slots: Map<String, String>) {
-        val lit = if (playing) slots.entries.firstOrNull { it.value == current }?.key ?: "" else ""
-        if (lit == shown) return
-        shown = lit
-        push(context, lit)
+    private val main = Handler(Looper.getMainLooper())
+    private val loader = Executors.newSingleThreadExecutor()
+    private var shown: List<Any?>? = null
+    private var coverOf: String? = null   // the track the cover below belongs to (or is loading for)
+    private var cover: Bitmap? = null
+    @Volatile private var wanted: String? = null   // lets queued loads for skipped songs bow out
+    private var missed: Pair<String, Long>? = null  // a cover that didn't load, and when to try again
+
+    private fun live(state: UiState): Live? {
+        val playlist = state.playlist
+        if (!state.playing || playlist == null) return null
+        val t = state.track
+        return Live(playlist, state.slots.entries.firstOrNull { it.value == playlist }?.key, t?.id,
+            t?.title?.ifBlank { null } ?: state.playlistName, t?.artist ?: "")
     }
 
-    fun push(context: Context, lit: String) {
+    private fun name(state: UiState, slot: String) = state.playlists.firstOrNull { it.id == state.slots[slot] }?.name
+
+    /** Called with every published state, on the main thread; pushes only when what shows has changed. */
+    fun update(context: Context, state: UiState) {
         val manager = AppWidgetManager.getInstance(context)
-        for ((provider, layout) in listOf(WideWidget::class.java to R.layout.widget_wide, TallWidget::class.java to R.layout.widget_tall)) {
-            val ids = manager.getAppWidgetIds(ComponentName(context, provider))
-            if (ids.isNotEmpty()) manager.updateAppWidget(ids, views(context, layout, lit))
-        }
+        val placed = PROVIDERS.map { (provider, layout) -> manager.getAppWidgetIds(ComponentName(context, provider)) to layout }
+            .filter { it.first.isNotEmpty() }
+        if (placed.isEmpty()) return
+        val live = live(state)
+        val retry = missed.let { it == null || it.first != live?.track || SystemClock.elapsedRealtime() >= it.second }
+        if (live?.track != null && live.track != coverOf && retry) loadCover(context, live.track)
+        val key = listOf(live, name(state, "1"), name(state, "2"), state.playlistName, cover.takeIf { live != null })
+        if (key == shown) return
+        shown = key
+        for ((ids, layout) in placed) manager.updateAppWidget(ids, views(context, layout, live, state))
     }
 
-    fun views(context: Context, layout: Int, lit: String): RemoteViews {
+    /** Redraws whatever is placed, even if nothing seems to have changed (say the process died mid-song). */
+    fun refresh(context: Context) {
+        shown = null
+        update(context, Engine.get(context).state.value)
+    }
+
+    private fun views(context: Context, layout: Int, live: Live?, state: UiState): RemoteViews {
         val views = RemoteViews(context.packageName, layout)
-        for ((slot, button, glyph, color) in listOf(
-            Quad("1", R.id.slot1, R.id.glyph1, RED), Quad("2", R.id.slot2, R.id.glyph2, BLUE))) {
-            val intent = Intent(context, ConfirmActivity::class.java).setAction(ConfirmActivity.SLOT).putExtra("slot", slot)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
-            views.setOnClickPendingIntent(button, PendingIntent.getActivity(context, slot.toInt(), intent,
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
-            views.setInt(glyph, "setColorFilter", if (lit == slot) color else IDLE)
-            views.setViewVisibility(if (slot == "1") R.id.ring1 else R.id.ring2,
-                if (lit == slot) android.view.View.VISIBLE else android.view.View.INVISIBLE)
+        views.setViewVisibility(R.id.idle, if (live == null) View.VISIBLE else View.GONE)
+        views.setViewVisibility(R.id.live, if (live == null) View.GONE else View.VISIBLE)
+        if (live == null) {
+            for ((slot, button) in listOf("1" to R.id.slot1, "2" to R.id.slot2)) {
+                val intent = Intent(context, ConfirmActivity::class.java).setAction(ConfirmActivity.SLOT).putExtra("slot", slot)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                views.setOnClickPendingIntent(button, PendingIntent.getActivity(context, slot.toInt(), intent, FLAGS))
+                views.setContentDescription(button, "Play ${name(state, slot) ?: slot}")
+            }
+            return views
+        }
+        views.setTextViewText(R.id.title, live.title)
+        views.setTextViewText(R.id.artist, live.artist)
+        views.setViewVisibility(R.id.artist, if (live.artist.isBlank()) View.GONE else View.VISIBLE)
+        val art = cover.takeIf { coverOf == live.track }
+        if (art != null) views.setImageViewBitmap(R.id.cover, art) else views.setImageViewResource(R.id.cover, R.drawable.widget_cover)
+        views.setImageViewResource(R.id.lit, when (live.slot) { "1" -> R.drawable.glyph_1; "2" -> R.drawable.glyph_2; else -> R.drawable.glyph_dot })
+        val open = Intent(context, MainActivity::class.java).setAction(MainActivity.OPEN).putExtra("playlist", live.playlist)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        views.setOnClickPendingIntent(R.id.open, PendingIntent.getActivity(context, 10, open, FLAGS))
+        views.setContentDescription(R.id.open, "Open ${state.playlistName.ifBlank { "playlist" }}")
+        for ((zone, action) in listOf(R.id.prev to WidgetButtons.PREV, R.id.pause to WidgetButtons.PAUSE, R.id.next to WidgetButtons.NEXT)) {
+            views.setOnClickPendingIntent(zone, PendingIntent.getBroadcast(context, zone, Intent(context, WidgetButtons::class.java).setAction(action), FLAGS))
         }
         return views
     }
 
-    private data class Quad(val slot: String, val button: Int, val glyph: Int, val color: Int)
+    // ---------- the cover
+
+    private const val COVER_PX = 200
+
+    /** The phone's own copy's embedded picture first (no network), then the hub's. Off the main thread;
+     * the answer is dropped if the song has moved on by then. */
+    private fun loadCover(context: Context, track: String) {
+        val engine = Engine.get(context)
+        coverOf = track
+        wanted = track
+        cover = null
+        val file = engine.localUri(track)
+        val url = engine.artUrl(engine.track(track), COVER_PX * 2)
+        loader.execute {
+            if (wanted != track) return@execute
+            val bytes = file?.let { embedded(context, it) } ?: url?.let { fetch(it) }
+            val bitmap = bytes?.let { runCatching { rounded(it) }.getOrNull() }
+            main.post {
+                if (coverOf != track) return@post
+                if (bitmap != null) {
+                    cover = bitmap
+                    missed = null
+                } else {
+                    // Maybe the hub was away, or the library hadn't loaded yet: let a later update try again.
+                    coverOf = null
+                    missed = track to SystemClock.elapsedRealtime() + if (url != null) 30_000 else 3_000
+                }
+                update(context, engine.state.value)
+            }
+        }
+    }
+
+    private fun embedded(context: Context, uri: Uri): ByteArray? = runCatching {
+        val r = MediaMetadataRetriever()
+        try { r.setDataSource(context, uri); r.embeddedPicture } finally { r.release() }
+    }.getOrNull()
+
+    private fun fetch(url: String): ByteArray? = runCatching {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        try {
+            conn.connectTimeout = 8000
+            conn.readTimeout = 8000
+            if (conn.responseCode == 200) conn.inputStream.use { it.readBytes() } else null
+        } finally { conn.disconnect() }
+    }.getOrNull()
+
+    /** A square, centre-cropped and rounded like the launcher's cards, small enough to hand to the launcher. */
+    private fun rounded(bytes: ByteArray): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (minOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= COVER_PX) sample *= 2
+        val src = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
+        val side = minOf(src.width, src.height)
+        val out = Bitmap.createBitmap(COVER_PX, COVER_PX, Bitmap.Config.ARGB_8888)
+        val shader = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
+            setLocalMatrix(android.graphics.Matrix().apply {
+                val scale = COVER_PX.toFloat() / side
+                setScale(scale, scale)
+                postTranslate(-(src.width - side) / 2f * scale, -(src.height - side) / 2f * scale)
+            })
+        }
+        val radius = COVER_PX * 0.23f   // about 14dp on a 60dp cover
+        Canvas(out).drawRoundRect(RectF(0f, 0f, COVER_PX.toFloat(), COVER_PX.toFloat()), radius, radius,
+            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { this.shader = shader })
+        src.recycle()
+        return out
+    }
+
+    private const val FLAGS = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    private val PROVIDERS = listOf(WideWidget::class.java to R.layout.widget_wide, TallWidget::class.java to R.layout.widget_tall)
 }
 
-abstract class SlotWidget(private val layout: Int) : AppWidgetProvider() {
-    override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
-        val state = Engine.get(context).state.value
-        val lit = if (state.playing) state.slots.entries.firstOrNull { it.value == state.playlist }?.key ?: "" else ""
-        manager.updateAppWidget(ids, Widgets.views(context, layout, lit))
+/** The back, pause and skip zones of a playing widget. They only touch music that is already playing,
+ * so a widget left showing a song after the process died just goes back to the 1 and 2. */
+class WidgetButtons : BroadcastReceiver() {
+    companion object {
+        const val PREV = "ca.heeney.doppler.WIDGET_PREV"
+        const val PAUSE = "ca.heeney.doppler.WIDGET_PAUSE"
+        const val NEXT = "ca.heeney.doppler.WIDGET_NEXT"
+    }
+
+    override fun onReceive(context: Context, intent: Intent) {
+        val engine = Engine.get(context)
+        if (!engine.state.value.playing) return Widgets.refresh(context)
+        when (intent.action) {
+            PREV -> engine.previous()
+            PAUSE -> engine.pause()
+            NEXT -> engine.next()
+        }
     }
 }
 
-class WideWidget : SlotWidget(R.layout.widget_wide)
-class TallWidget : SlotWidget(R.layout.widget_tall)
+abstract class SlotWidget : AppWidgetProvider() {
+    /** A newly placed widget gets the current look, and its cover loads if it wasn't already. */
+    override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) = Widgets.refresh(context)
+}
+
+class WideWidget : SlotWidget()
+class TallWidget : SlotWidget()

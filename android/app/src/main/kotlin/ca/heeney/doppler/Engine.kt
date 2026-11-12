@@ -362,8 +362,9 @@ class Engine private constructor(private val context: Context) {
 
     fun tracksOf(playlist: String) = Core.playlistTracks(playlist, library.keys, custom())
     fun track(id: String?): Track? = id?.let { library[it] ?: Track.guess(it) }
-    fun artUrl(track: Track?): String? = if (track != null && track.art && hub.base.isNotBlank()) hub.artUrl(track.id) else null
+    fun artUrl(track: Track?, size: Int = 640): String? = if (track != null && track.art && hub.base.isNotBlank()) hub.artUrl(track.id, size) else null
     fun isLocal(id: String) = id in local
+    fun localUri(id: String): Uri? = local[id]
 
     /** Everyone's count, or this phone's own when the hub hasn't heard it yet. */
     fun playsOf(id: String): Play = maxOf(hubPlays[id] ?: Play.NONE, plays[id] ?: Play.NONE)
@@ -419,7 +420,7 @@ class Engine private constructor(private val context: Context) {
             onSpeaker = Speaker.isPhone(context), localCount = local.size, libraryCount = library.size,
             customs = custom.values.toList(), playsRev = playsRev,
         )
-        Widgets.update(context, current, playing, slots)
+        Widgets.update(context, _state.value)
     }
 
     // ---------- playing

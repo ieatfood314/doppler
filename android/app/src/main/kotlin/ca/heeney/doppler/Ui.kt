@@ -94,9 +94,17 @@ private sealed interface Screen {
 }
 
 @Composable
-fun App(engine: Engine, askFiles: () -> Unit) {
+fun App(engine: Engine, askFiles: () -> Unit, opening: String? = null, opened: () -> Unit = {}) {
     val state by engine.state.collectAsState()
     val stack = remember { mutableStateListOf<Screen>(Screen.Home) }
+    // The widget's playing number lands on that playlist's page, with home behind it.
+    LaunchedEffect(opening) {
+        if (opening != null) {
+            stack.clear()
+            stack.addAll(listOf(Screen.Home, Screen.Playlist(opening)))
+            opened()
+        }
+    }
     val screen = stack.last()
     BackHandler(stack.size > 1) { stack.removeAt(stack.lastIndex) }
     Box(Modifier.fillMaxSize().background(Palette.Void)) {

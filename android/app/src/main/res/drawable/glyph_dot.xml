@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One star (a playlist with no key) as stars, made by tools/make_art.py. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="25.0dp" android:height="35.0dp"
+    android:viewportWidth="50" android:viewportHeight="70">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M21.70,35.00a3.30,3.30 0 1,0 6.60,0a3.30,3.30 0 1,0 -6.60,0" />
+</vector>

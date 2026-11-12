@@ -45,6 +45,7 @@
             </intent-filter>
         </service>
 
+        <receiver android:name=".WidgetButtons" android:exported="false" />
         <receiver android:name=".WideWidget" android:exported="false" android:label="doppler 1 2">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_wide" />

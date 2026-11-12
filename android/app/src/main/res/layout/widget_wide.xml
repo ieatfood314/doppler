@@ -1,57 +1,54 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/root"
+<!-- Widgets.kt shows "idle" (1 and 2) or "live" (cover, title and artist over back, pause and skip zones, with the playing number in the corner). -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="horizontal"
-    android:padding="4dp"
     android:background="@drawable/widget_bg">
-    <FrameLayout
-        android:id="@+id/slot1"
-        android:layout_width="0dp"
-        android:layout_height="match_parent"
-        android:layout_weight="1"
-        android:background="@drawable/widget_press"
-        android:contentDescription="Play playlist 1">
-        <ImageView
-            android:id="@+id/ring1"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:scaleType="fitCenter"
-            android:src="@drawable/ring_1"
-            android:visibility="invisible"
+    <LinearLayout android:id="@+id/idle" android:layout_width="match_parent" android:layout_height="match_parent"
+        android:orientation="horizontal" android:padding="4dp">
+        <FrameLayout android:id="@+id/slot1" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:background="@drawable/widget_press" android:contentDescription="Play 1">
+            <ImageView android:id="@+id/glyph1" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_margin="14dp"
+            android:scaleType="fitCenter" android:src="@drawable/glyph_1" android:tint="@color/widget_fg"
             android:importantForAccessibility="no" />
-        <ImageView
-            android:id="@+id/glyph1"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:layout_margin="10dp"
-            android:scaleType="fitCenter"
-            android:src="@drawable/glyph_1"
+        </FrameLayout>
+        <FrameLayout android:id="@+id/slot2" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:background="@drawable/widget_press" android:contentDescription="Play 2">
+            <ImageView android:id="@+id/glyph2" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_margin="14dp"
+            android:scaleType="fitCenter" android:src="@drawable/glyph_2" android:tint="@color/widget_fg"
             android:importantForAccessibility="no" />
+        </FrameLayout>
+    </LinearLayout>
+    <FrameLayout android:id="@+id/live" android:layout_width="match_parent" android:layout_height="match_parent" android:visibility="gone">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="horizontal"
+            android:gravity="center_vertical" android:padding="10dp">
+            <ImageView android:id="@+id/cover" android:layout_width="60dp" android:layout_height="60dp"
+                android:scaleType="centerCrop" android:src="@drawable/widget_cover" android:importantForAccessibility="no" />
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:layout_marginStart="10dp" android:orientation="vertical">
+                <TextView android:id="@+id/title" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:textSize="13sp" android:textColor="@color/widget_fg" android:fontFamily="@font/space_grotesk"
+                    android:maxLines="2" android:ellipsize="end" android:lineSpacingMultiplier="0.95" />
+                <TextView android:id="@+id/artist" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp" android:layout_marginEnd="20dp"
+                    android:textSize="11sp" android:textColor="@color/widget_dim" android:fontFamily="@font/space_grotesk"
+                    android:maxLines="1" android:ellipsize="end" />
+            </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="horizontal">
+            <FrameLayout android:id="@+id/prev" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+                android:background="@drawable/widget_press" android:contentDescription="Back" />
+            <FrameLayout android:id="@+id/pause" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="2"
+                android:background="@drawable/widget_press" android:contentDescription="Pause" />
+            <FrameLayout android:id="@+id/next" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+                android:background="@drawable/widget_press" android:contentDescription="Skip" />
+        </LinearLayout>
+        <FrameLayout android:id="@+id/open" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="bottom|end"
+            android:background="@drawable/widget_press" android:contentDescription="Open playlist">
+            <ImageView android:id="@+id/lit" android:layout_width="9dp" android:layout_height="13dp" android:layout_gravity="center"
+                android:scaleType="fitCenter" android:src="@drawable/glyph_1" android:tint="@color/nothing_red"
+                android:importantForAccessibility="no" />
+        </FrameLayout>
     </FrameLayout>
-    <FrameLayout
-        android:id="@+id/slot2"
-        android:layout_width="0dp"
-        android:layout_height="match_parent"
-        android:layout_weight="1"
-        android:background="@drawable/widget_press"
-        android:contentDescription="Play playlist 2">
-        <ImageView
-            android:id="@+id/ring2"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:scaleType="fitCenter"
-            android:src="@drawable/ring_2"
-            android:visibility="invisible"
-            android:importantForAccessibility="no" />
-        <ImageView
-            android:id="@+id/glyph2"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:layout_margin="10dp"
-            android:scaleType="fitCenter"
-            android:src="@drawable/glyph_2"
-            android:importantForAccessibility="no" />
-    </FrameLayout>
-</LinearLayout>
+</FrameLayout>

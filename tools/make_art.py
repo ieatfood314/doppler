@@ -10,18 +10,20 @@ DOTS = {
     "1": ["..#..", ".##..", "#.#..", "..#..", "..#..", "..#..", "#####"],
     "2": [".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"],
 }
+# The widget's mark for a playlist with no key: one star, on a numeral's grid so it sits the same way.
+DOT = [".....", ".....", ".....", "..#..", ".....", ".....", "....."]
 
 RED, BLUE = "#FF5A3C", "#5B8CFF"
 
 
-def glyph_vector(ch):
+def glyph_vector(ch, rows=None, what=None):
     pitch = 10
-    rows = DOTS[ch]
+    rows = rows or DOTS[ch]
     w, h = pitch * len(rows[0]), pitch * len(rows)
     dots = "".join(circle_path((c + 0.5) * pitch, (r + 0.5) * pitch, pitch * 0.33)
                    for r, row in enumerate(rows) for c, on in enumerate(row) if on == "#")
     return f'''<?xml version="1.0" encoding="utf-8"?>
-<!-- The numeral {ch} as stars, made by tools/make_art.py. -->
+<!-- {what or "The numeral " + ch} as stars, made by tools/make_art.py. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="{w / 2}dp" android:height="{h / 2}dp"
     android:viewportWidth="{w}" android:viewportHeight="{h}">
@@ -99,6 +101,7 @@ def write(path, text):
 
 write(os.path.join(RES, "drawable", "glyph_1.xml"), glyph_vector("1"))
 write(os.path.join(RES, "drawable", "glyph_2.xml"), glyph_vector("2"))
+write(os.path.join(RES, "drawable", "glyph_dot.xml"), glyph_vector("dot", DOT, "One star (a playlist with no key)"))
 write(os.path.join(RES, "drawable", "ic_launcher_foreground.xml"), icon_vector())
 write(os.path.join(RES, "drawable", "ic_notification.xml"), mono_vector())
 write(os.path.join(HERE, "..", "desktop", "doppler.svg"), icon_svg())

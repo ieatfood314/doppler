@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widgets wear the Nothing launcher's own look; the launcher picks day or night. -->
+<resources>
+    <color name="widget_bg">#FFF2F2F2</color>
+    <color name="widget_fg">#FF000000</color>
+    <color name="widget_dim">#8C000000</color>
+    <color name="widget_well">#FFE3E3E3</color>
+    <color name="widget_press">#14000000</color>
+    <color name="nothing_red">#FFD71921</color>
+</resources>

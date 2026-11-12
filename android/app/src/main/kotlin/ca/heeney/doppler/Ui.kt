@@ -446,19 +446,21 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
     var confirmDelete by remember { mutableStateOf(false) }
     var searching by rememberSaveable(id) { mutableStateOf(find.isNotEmpty()) }
     var more by remember { mutableStateOf(false) }
-    var picking by remember { mutableStateOf(false) }
+    var picking by rememberSaveable(id) { mutableStateOf(false) }
     val pickMode = picking || selected.isNotEmpty()
     val custom = view?.custom == true
     BackHandler(searching) { searching = false; find = "" }
     BackHandler(pickMode) { selected.clear(); picking = false }
     Box(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().padding(horizontal = 22.dp)) {
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().padding(horizontal = 22.dp)) {
+        // Outside the list, so the search field stays put (and keeps focus) while the results scroll.
+        TopBar(back, searching, find, { find = it }, "Find in ${view?.name ?: "this playlist"}",
+            openSearch = if (tracks.size > 1) ({ searching = true }) else null,
+            closeSearch = { searching = false; find = "" },
+            sortOn = sort != "default", openSort = if (tracks.size > 1) ({ choosingSort = true }) else null,
+            openMore = { more = true })
+        LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
             item {
-                TopBar(back, searching, find, { find = it }, "Find in ${view?.name ?: "this playlist"}",
-                    openSearch = if (tracks.size > 1) ({ searching = true }) else null,
-                    closeSearch = { searching = false; find = "" },
-                    sortOn = sort != "default", openSort = if (tracks.size > 1) ({ choosingSort = true }) else null,
-                    openMore = { more = true })
                 Title(view?.name ?: "Playlist")
                 val about = buildString {
                     append(if (tracks.size == 1) "1 track" else "${tracks.size} tracks")
@@ -494,6 +496,7 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
                     onLong = { if (picked) selected.remove(t.id) else selected.add(t.id) })
             }
             item { Spacer(Modifier.height(if (pickMode) 120.dp else 40.dp)) }
+        }
         }
         if (pickMode) {
             Row(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp).fillMaxWidth().clip(RoundedCornerShape(22.dp))
@@ -793,7 +796,7 @@ private fun DrawScope.drawClose(c: Color) {
 private fun PlayButton(playing: Boolean, color: Color, onClick: () -> Unit) {
     Box(Modifier.size(60.dp).clip(CircleShape).background(color).clickable(onClick = onClick)
         .semantics { contentDescription = if (playing) "Pause" else "Play" }, contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(20.dp).padding(start = if (playing) 0.dp else 2.dp)) { if (playing) drawPause(Palette.Void) else drawPlay(Palette.Void) }
+        Canvas(Modifier.padding(start = if (playing) 0.dp else 3.dp).size(20.dp)) { if (playing) drawPause(Palette.Void) else drawPlay(Palette.Void) }
     }
 }
 

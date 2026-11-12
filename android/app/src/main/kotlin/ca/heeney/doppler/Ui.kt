@@ -3,6 +3,8 @@ package ca.heeney.doppler
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -40,6 +42,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -54,6 +57,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -64,6 +69,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -438,40 +444,41 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
     var adding by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
-    BackHandler(selected.isNotEmpty()) { selected.clear() }
+    var searching by rememberSaveable(id) { mutableStateOf(find.isNotEmpty()) }
+    var more by remember { mutableStateOf(false) }
+    var picking by remember { mutableStateOf(false) }
+    val pickMode = picking || selected.isNotEmpty()
+    val custom = view?.custom == true
+    BackHandler(searching) { searching = false; find = "" }
+    BackHandler(pickMode) { selected.clear(); picking = false }
     Box(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().padding(horizontal = 22.dp)) {
-            item { Header(view?.name ?: "Playlist", back) }
             item {
+                TopBar(back, searching, find, { find = it }, "Find in ${view?.name ?: "this playlist"}",
+                    openSearch = if (tracks.size > 1) ({ searching = true }) else null,
+                    closeSearch = { searching = false; find = "" },
+                    sortOn = sort != "default", openSort = if (tracks.size > 1) ({ choosingSort = true }) else null,
+                    openMore = { more = true })
+                Title(view?.name ?: "Playlist")
                 val about = buildString {
-                    append("${tracks.size} tracks")
-                    if (view?.custom == true) append(", made by you") else if (view != null && view.path.isNotEmpty()) append(", the folder ${view.path}")
+                    append(if (tracks.size == 1) "1 track" else "${tracks.size} tracks")
+                    if (view?.mode == "order") append(", in order")
+                    if (custom) append(", made by you")
+                    else if (view != null && view.path.isNotEmpty() && view.path != view.name) append(", from ${view.path}")
                 }
-                Text(about, color = Palette.Dust, size = 14, modifier = Modifier.padding(bottom = 14.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
-                    if (!(state.playing && state.playlist == id)) Pill("Play", true, view?.slot?.let { Palette.slot(it) } ?: Palette.Starlight) { engine.requestPlay(id) }
-                    Pill("Reshuffle") { engine.requestPlay(id, fresh = true) }
-                    Pill(if (view?.mode == "order") "In order" else "Shuffled") {
-                        engine.setMode(id, if (view?.mode == "order") "shuffle" else "order")
+                Text(about, color = Palette.Dust, size = 14)
+                Row(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    val here = state.playing && state.playlist == id
+                    PlayButton(here, view?.slot?.takeIf { it.isNotEmpty() }?.let { Palette.slot(it) } ?: Palette.Starlight) {
+                        if (here) engine.toggle() else engine.requestPlay(id)
                     }
+                    Text(if (view?.mode == "order") "From the top" else "Reshuffle",
+                        Modifier.padding(start = 10.dp).clip(RoundedCornerShape(12.dp)).clickable { engine.requestPlay(id, fresh = true) }
+                            .padding(horizontal = 10.dp, vertical = 12.dp),
+                        color = Palette.Starlight, size = 15, weight = FontWeight.Medium)
+                    Spacer(Modifier.weight(1f))
+                    for (slot in listOf("1", "2")) KeyToggle(slot, view?.slot == slot) { engine.setSlot(slot, id) }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
-                    for (slot in listOf("1", "2")) {
-                        val on = view?.slot == slot
-                        Pill(if (on) "On $slot" else "Put on $slot", on, Palette.slot(slot)) { if (!on) engine.setSlot(slot, id) }
-                    }
-                    if (view?.custom == true) {
-                        Pill("Rename") { renaming = true }
-                        Pill("Delete") { confirmDelete = true }
-                    }
-                }
-                if (tracks.size > 1) Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Field(find, { find = it }, "Find in ${view?.name ?: "this playlist"}", Modifier.weight(1f))
-                    Pill(sortName(sort, view?.custom == true)) { choosingSort = true }
-                }
-                Text(if (view?.custom == true) "Long-press tracks to pick some to remove or copy" else "Long-press tracks to put them in a playlist",
-                    color = Palette.Faint, size = 12, modifier = Modifier.padding(top = 10.dp, bottom = 6.dp))
             }
             if (tracks.isNotEmpty() && shown.isEmpty()) item {
                 Text("Nothing here matches that", color = Palette.Dust, size = 15, modifier = Modifier.padding(vertical = 14.dp))
@@ -483,21 +490,25 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
             items(shown, key = { it.id }) { t ->
                 val picked = t.id in selected
                 TrackRow(engine, t, state.track?.id == t.id && state.playlist == id, picked, note = sortNote(engine, t, sort),
-                    onClick = { if (selected.isNotEmpty()) { if (picked) selected.remove(t.id) else selected.add(t.id) } else engine.requestPlay(id, t.id) },
+                    onClick = { if (pickMode) { if (picked) selected.remove(t.id) else selected.add(t.id) } else engine.requestPlay(id, t.id) },
                     onLong = { if (picked) selected.remove(t.id) else selected.add(t.id) })
             }
-            item { Spacer(Modifier.height(if (selected.isNotEmpty()) 120.dp else 40.dp)) }
+            item { Spacer(Modifier.height(if (pickMode) 120.dp else 40.dp)) }
         }
-        if (selected.isNotEmpty()) {
+        if (pickMode) {
             Row(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp).fillMaxWidth().clip(RoundedCornerShape(22.dp))
                 .background(Palette.Panel).border(1.dp, Palette.Hairline, RoundedCornerShape(22.dp)).padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("${selected.size} picked", color = Palette.Starlight, size = 15, modifier = Modifier.weight(1f).padding(start = 6.dp))
-                if (view?.custom == true) Pill("Remove") {
-                    engine.hubEdit("PUT", "/api/playlists/$id", JSONObject().put("remove", JSONArray(selected.toList())))
-                    selected.clear()
+                Text(if (selected.isEmpty()) "Tap songs to pick them" else "${selected.size} picked", color = Palette.Starlight, size = 15,
+                    modifier = Modifier.weight(1f).padding(start = 6.dp))
+                if (selected.isEmpty()) Pill("Cancel") { picking = false }
+                else {
+                    if (custom) Pill("Remove") {
+                        engine.hubEdit("PUT", "/api/playlists/$id", JSONObject().put("remove", JSONArray(selected.toList())))
+                        selected.clear(); picking = false
+                    }
+                    Pill("Add to playlist", true) { adding = true }
                 }
-                Pill("Add to playlist", true) { adding = true }
             }
         }
     }
@@ -516,7 +527,18 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
             }
         }
     }
-    if (adding) AddDialog(engine, state, selected.toList(), { adding = false }) { adding = false; selected.clear() }
+    if (more) Sheet({ more = false }) {
+        SheetItem(if (view?.mode == "order") "Shuffle it" else "Play in order") {
+            more = false
+            engine.setMode(id, if (view?.mode == "order") "shuffle" else "order")
+        }
+        if (tracks.isNotEmpty()) SheetItem("Pick songs") { more = false; picking = true }
+        if (custom) {
+            SheetItem("Rename") { more = false; renaming = true }
+            SheetItem("Delete", Palette.Red) { more = false; confirmDelete = true }
+        }
+    }
+    if (adding) AddDialog(engine, state, selected.toList(), { adding = false }) { adding = false; selected.clear(); picking = false }
     if (renaming && view != null) NameDialog("Rename", view.name, "Rename", { renaming = false }) { name ->
         renaming = false
         engine.hubEdit("PUT", "/api/playlists/$id", JSONObject().put("name", name))
@@ -668,17 +690,128 @@ fun Text(text: String, modifier: Modifier = Modifier, color: Color = Palette.Sta
 
 @Composable
 private fun Header(title: String, back: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(44.dp).clip(CircleShape).clickable(onClick = back).semantics { contentDescription = "Back" }, contentAlignment = Alignment.CenterStart) {
-            Canvas(Modifier.size(18.dp)) {
-                val s = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round)
-                drawPath(Path().apply { moveTo(size.width * 0.6f, 0f); lineTo(size.width * 0.1f, size.height / 2); lineTo(size.width * 0.6f, size.height) }, Palette.Starlight, style = s)
-            }
+    Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) { BackButton(back) }
+    Title(title)
+}
+
+@Composable
+private fun BackButton(back: () -> Unit) {
+    Box(Modifier.size(44.dp).clip(CircleShape).clickable(onClick = back).semantics { contentDescription = "Back" }, contentAlignment = Alignment.CenterStart) {
+        Canvas(Modifier.size(18.dp)) {
+            val s = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round)
+            drawPath(Path().apply { moveTo(size.width * 0.6f, 0f); lineTo(size.width * 0.1f, size.height / 2); lineTo(size.width * 0.6f, size.height) }, Palette.Starlight, style = s)
         }
     }
+}
+
+@Composable
+private fun Title(title: String) {
     if (title == "1" || title == "2") DotNumeral(title, 46.dp, Palette.Starlight, lit = false, animate = false,
         modifier = Modifier.padding(top = 4.dp, bottom = 10.dp).semantics { contentDescription = title })
     else Text(title, color = Palette.Starlight, size = 40, family = Type.Display, maxLines = 2, modifier = Modifier.padding(bottom = 4.dp))
+}
+
+/** Back on the left, quiet icons on the right. The magnifier opens into the search field in place. */
+@Composable
+private fun TopBar(back: () -> Unit, searching: Boolean, find: String, change: (String) -> Unit, hint: String,
+                   openSearch: (() -> Unit)?, closeSearch: () -> Unit, sortOn: Boolean, openSort: (() -> Unit)?, openMore: () -> Unit) {
+    Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
+        BackButton(back)
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+            AnimatedContent(searching, transitionSpec = {
+                (fadeIn(tween(160)) + expandHorizontally(tween(200), expandFrom = Alignment.End)) togetherWith fadeOut(tween(90)) using SizeTransform(clip = false)
+            }, contentAlignment = Alignment.CenterEnd, label = "search") { open ->
+                if (open) SearchField(find, change, hint, closeSearch)
+                else Row(verticalAlignment = Alignment.CenterVertically) {
+                    openSearch?.let { IconButton("Find", it) { c -> drawFind(c) } }
+                    openSort?.let { IconButton(if (sortOn) "Sort, changed" else "Sort", it, dot = sortOn) { c -> drawSort(c) } }
+                    IconButton("More", openMore) { c -> drawMore(c) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchField(value: String, change: (String) -> Unit, hint: String, close: () -> Unit) {
+    val focus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    Row(Modifier.padding(start = 8.dp).fillMaxWidth().height(44.dp).clip(RoundedCornerShape(22.dp)).background(Palette.Panel)
+        .border(1.dp, Palette.Hairline, RoundedCornerShape(22.dp)).padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Canvas(Modifier.size(15.dp)) { drawFind(Palette.Dust) }
+        Box(Modifier.weight(1f).padding(start = 10.dp), contentAlignment = Alignment.CenterStart) {
+            if (value.isEmpty()) Text(hint, color = Palette.Faint, size = 15, maxLines = 1)
+            BasicTextField(value, change, singleLine = true, cursorBrush = SolidColor(Palette.Starlight),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+                textStyle = TextStyle(fontFamily = Type.Sans, fontSize = 15.sp, color = Palette.Starlight),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus))
+        }
+        IconButton("Close search", close) { c -> drawClose(c) }
+    }
+}
+
+@Composable
+private fun IconButton(label: String, onClick: () -> Unit, dot: Boolean = false, draw: DrawScope.(Color) -> Unit) {
+    Box(Modifier.size(44.dp).clip(CircleShape).clickable(onClick = onClick).semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(18.dp)) { draw(Palette.Starlight) }
+        if (dot) Box(Modifier.align(Alignment.TopEnd).padding(top = 9.dp, end = 9.dp).size(5.dp).clip(CircleShape).background(Palette.Starlight))
+    }
+}
+
+private fun DrawScope.drawFind(c: Color) {
+    val w = 1.6.dp.toPx()
+    val r = size.width * 0.32f
+    val o = Offset(size.width * 0.42f, size.height * 0.42f)
+    drawCircle(c, r, o, style = Stroke(w))
+    drawLine(c, Offset(o.x + r * 0.72f, o.y + r * 0.72f), Offset(size.width * 0.95f, size.height * 0.95f), w, StrokeCap.Round)
+}
+
+private fun DrawScope.drawSort(c: Color) {
+    val w = 1.6.dp.toPx()
+    for ((i, f) in listOf(1f, 0.68f, 0.36f).withIndex()) {
+        val y = size.height * (0.2f + i * 0.3f)
+        drawLine(c, Offset(size.width * 0.05f, y), Offset(size.width * (0.05f + 0.9f * f), y), w, StrokeCap.Round)
+    }
+}
+
+private fun DrawScope.drawMore(c: Color) {
+    for (i in 0..2) drawCircle(c, 1.7.dp.toPx(), Offset(size.width * (0.15f + i * 0.35f), size.height / 2))
+}
+
+private fun DrawScope.drawClose(c: Color) {
+    val w = 1.6.dp.toPx()
+    val a = size.width * 0.22f
+    val b = size.width * 0.78f
+    drawLine(c, Offset(a, a), Offset(b, b), w, StrokeCap.Round)
+    drawLine(c, Offset(b, a), Offset(a, b), w, StrokeCap.Round)
+}
+
+/** The one big thing on a playlist page, in the color of its key. */
+@Composable
+private fun PlayButton(playing: Boolean, color: Color, onClick: () -> Unit) {
+    Box(Modifier.size(60.dp).clip(CircleShape).background(color).clickable(onClick = onClick)
+        .semantics { contentDescription = if (playing) "Pause" else "Play" }, contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(20.dp).padding(start = if (playing) 0.dp else 2.dp)) { if (playing) drawPause(Palette.Void) else drawPlay(Palette.Void) }
+    }
+}
+
+/** Which key the playlist is on: the lit numeral is its key, tap the other to move it there. */
+@Composable
+private fun KeyToggle(slot: String, on: Boolean, put: () -> Unit) {
+    val color = Palette.slot(slot)
+    Box(Modifier.padding(start = 8.dp).size(42.dp).clip(CircleShape)
+        .then(if (on) Modifier.background(color.copy(alpha = 0.16f)).border(1.dp, color, CircleShape) else Modifier.border(1.dp, Palette.Hairline, CircleShape))
+        .clickable(enabled = !on, onClick = put)
+        .semantics { contentDescription = if (on) "On key $slot" else "Put on key $slot" }, contentAlignment = Alignment.Center) {
+        DotNumeral(slot, 16.dp, if (on) color else Palette.Dust, lit = false, animate = false)
+    }
+}
+
+@Composable
+private fun SheetItem(label: String, color: Color = Palette.Starlight, onClick: () -> Unit) {
+    Text(label, Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(vertical = 13.dp), color = color, size = 16)
 }
 
 @Composable

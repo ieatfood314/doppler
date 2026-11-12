@@ -31,6 +31,15 @@ Window {
     property var tracks: []
     property string query: ""
     property var allTracks: []
+    property string find: ""          // the search inside an open playlist
+    property string sortBy: "default"
+    readonly property var sorts: [["default", ""], ["title", "Title"], ["artist", "Artist"], ["album", "Album"],
+                                  ["most", "Most played"], ["least", "Least played"], ["recent", "Recently played"]]
+    function sortName(key) {
+        if (key === "default") return plPage.pv && plPage.pv.kind === "custom" ? "Order added" : "File order"
+        for (var i = 0; i < sorts.length; i++) if (sorts[i][0] === key) return sorts[i][1]
+        return ""
+    }
 
     FontLoader { id: sans; source: "fonts/space-grotesk.ttf" }
 
@@ -77,15 +86,45 @@ Window {
     function clock(s) { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2) }
     function view(id) { if (!st) return null; for (var i = 0; i < st.playlists.length; i++) if (st.playlists[i].id === id) return st.playlists[i]; return null }
     function loadTracks(id) { call("GET", "/tracks?playlist=" + encodeURIComponent(id), null, function (d) { if (d) tracks = d }) }
-    function showPlaylist(id) { openPlaylist = id; libraryOpen = true; tracks = []; loadTracks(id) }
+    function showPlaylist(id) { openPlaylist = id; libraryOpen = true; tracks = []; plFind.text = ""; loadTracks(id) }
+    property int playsRev: st ? st.playsRev || 0 : 0
+    onPlaysRevChanged: if (openPlaylist && (sortBy === "most" || sortBy === "least" || sortBy === "recent")) loadTracks(openPlaylist)
+    function shown() {
+        var q = find, list = []
+        for (var i = 0; i < tracks.length; i++) {
+            var t = tracks[i]
+            if (!q || (t.title + " " + t.artist + " " + t.album).toLowerCase().indexOf(q) >= 0) list.push({ t: t, i: i })
+        }
+        function text(a, b) { return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }) }
+        var by = {
+            title: function (a, b) { return text(a.t.title, b.t.title) },
+            artist: function (a, b) { return text(a.t.artist || "\uffff", b.t.artist || "\uffff") || text(a.t.album, b.t.album) },
+            album: function (a, b) { return text(a.t.album || "\uffff", b.t.album || "\uffff") },
+            most: function (a, b) { return (b.t.plays || 0) - (a.t.plays || 0) },
+            least: function (a, b) { return (a.t.plays || 0) - (b.t.plays || 0) },
+            recent: function (a, b) { return (b.t.last || 0) - (a.t.last || 0) }
+        }[sortBy]
+        if (by) list.sort(function (a, b) { return by(a, b) || a.i - b.i })
+        return list.map(function (x) { return x.t })
+    }
+    function ago(when) {
+        if (!when) return "Never"
+        var days = Math.floor((Date.now() / 1000 - when) / 86400)
+        if (days < 1) return "Today"
+        if (days < 2) return "Yesterday"
+        if (days < 14) return days + " days ago"
+        if (days < 60) return Math.floor(days / 7) + " weeks ago"
+        if (days < 365) return Math.floor(days / 30) + " months ago"
+        return days < 730 ? "A year ago" : Math.floor(days / 365) + " years ago"
+    }
 
     Shortcut { sequence: "1"; onActivated: act("/slot", { slot: "1" }) }
     Shortcut { sequence: "2"; onActivated: act("/slot", { slot: "2" }) }
     Shortcut { sequence: "Space"; onActivated: act("/toggle") }
     Shortcut { sequence: "Right"; onActivated: act("/next") }
     Shortcut { sequence: "Left"; onActivated: act("/prev") }
-    Shortcut { sequence: "Escape"; onActivated: { if (openPlaylist) openPlaylist = ""; else if (libraryOpen) libraryOpen = false; else win.close() } }
-    Shortcut { sequence: "Ctrl+F"; onActivated: { libraryOpen = true; openPlaylist = ""; search.forceActiveFocus() } }
+    Shortcut { sequence: "Escape"; onActivated: { if (openPlaylist && plFind.text) plFind.text = ""; else if (openPlaylist) openPlaylist = ""; else if (libraryOpen) libraryOpen = false; else win.close() } }
+    Shortcut { sequence: "Ctrl+F"; onActivated: { if (openPlaylist) plFind.forceActiveFocus(); else { libraryOpen = true; search.forceActiveFocus() } } }
 
     // ------------------------------------------------------------ the sky
     Canvas {
@@ -386,10 +425,21 @@ Window {
                 Pill { visible: plPage.pv && plPage.pv.kind === "custom"; label: "Delete"
                     onClicked: { hub("DELETE", "/api/playlists/" + openPlaylist); openPlaylist = "" } }
             }
+            Rectangle {
+                id: plFindBox; anchors { top: plActions.bottom; left: parent.left; right: sortPill.left; topMargin: 14; rightMargin: 8 }
+                height: 36; radius: 12; color: panel; border.color: plFind.activeFocus ? faint : hairline
+                TextInput { id: plFind; anchors.fill: parent; anchors.margins: 9; anchors.leftMargin: 11; color: starlight; font.family: sans.name; font.pixelSize: 14; clip: true
+                    onTextChanged: find = text.trim().toLowerCase() }
+                Words { anchors.fill: parent; anchors.margins: 9; anchors.leftMargin: 11; visible: !plFind.text; color: faint; font.pixelSize: 14; text: "Find in " + (plPage.pv ? plPage.pv.name : "this playlist") }
+            }
+            Pill { id: sortPill; anchors { right: parent.right; verticalCenter: plFindBox.verticalCenter }
+                label: sortName(sortBy); onClicked: sortMenu.popup(sortPill, 0, sortPill.height + 4) }
+            Words { id: noMatch; anchors { top: plFindBox.bottom; left: parent.left; topMargin: 16; leftMargin: 4 }
+                visible: find !== "" && trackList.count === 0; color: dust; text: "Nothing here matches that" }
             ListView {
                 id: trackList
-                anchors { top: plActions.bottom; left: parent.left; right: parent.right; bottom: parent.bottom; topMargin: 12 }
-                clip: true; model: tracks
+                anchors { top: plFindBox.bottom; left: parent.left; right: parent.right; bottom: parent.bottom; topMargin: 8 }
+                clip: true; model: { find; sortBy; return shown() }
                 delegate: Item {
                     required property var modelData
                     width: ListView.view.width; height: 46
@@ -403,7 +453,9 @@ Window {
             color: trMouse.containsMouse ? dust : "transparent"; font.pixelSize: 12
                         text: plPage.pv && plPage.pv.kind === "custom" ? "Remove" : "Add to" }
                     Words { id: dur; anchors { right: parent.right; rightMargin: 6; verticalCenter: parent.verticalCenter }
-            color: faint; font.pixelSize: 12; text: clock(modelData.duration) }
+            color: faint; font.pixelSize: 12
+                        text: sortBy === "most" || sortBy === "least" ? (modelData.plays ? modelData.plays + (modelData.plays === 1 ? " play" : " plays") : "Not played")
+                            : sortBy === "recent" ? ago(modelData.last) : clock(modelData.duration) }
                     MouseArea { id: trMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                         onClicked: function (e) {
                             if (e.x > add.x - 6 && e.x < add.x + add.width + 6) {
@@ -432,6 +484,19 @@ Window {
         MenuItem { contentItem: Text { text: "A new playlist"; color: dust; font.family: sans.name; font.pixelSize: 14 }
             background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
             onTriggered: hub("POST", "/api/playlists", { name: "New playlist", tracks: [addMenu.trackId] }) }
+    }
+
+    Menu {
+        id: sortMenu
+        background: Rectangle { implicitWidth: 200; color: panel; border.color: hairline; radius: 10 }
+        Repeater {
+            model: sorts
+            MenuItem { required property var modelData
+                contentItem: Text { text: sortName(modelData[0]); color: sortBy === modelData[0] ? starlight : dust; font.family: sans.name; font.pixelSize: 14
+                    font.weight: sortBy === modelData[0] ? Font.Medium : Font.Normal }
+                background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
+                onTriggered: { sortBy = modelData[0]; if (modelData[0] !== "default") loadTracks(openPlaylist) } }
+        }
     }
 
     Rectangle {

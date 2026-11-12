@@ -16,6 +16,8 @@ AUDIO_EXTS = frozenset(
 LIVE_WINDOW = 45.0
 # Resuming this close to the end of a track starts the next one instead.
 END_SLACK = 3.0
+# A track counts as played once half of it has been heard, or this many seconds of a long one.
+PLAY_AFTER = 240.0
 
 
 def is_audio(name: str) -> bool:
@@ -174,3 +176,38 @@ def clamp_index(index, count: int) -> int:
     except (TypeError, ValueError):
         return 0
     return min(max(index, 0), max(count - 1, 0))
+
+
+def counts_as_play(heard: float, duration: float) -> bool:
+    """Whether this much of a track is enough to call it played: half of it, or four minutes."""
+    if duration <= 0:
+        return heard >= 30
+    return heard >= min(duration / 2, PLAY_AFTER)
+
+
+def merge_plays(into: dict, plays: dict) -> bool:
+    """Fold play counts in, keeping the higher count and the later time for each track. Every device
+    sends its own running totals, so this is safe to repeat and to receive in any order.
+    Both sides are {track: [count, last played]}. Returns whether anything changed."""
+    changed = False
+    for track, value in plays.items():
+        try:
+            count, last = int(value[0]), float(value[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        old = into.get(track)
+        new = [max(count, old[0]), max(last, old[1])] if old else [count, last]
+        if new != old:
+            into[str(track)] = new
+            changed = True
+    return changed
+
+
+def total_plays(sources: dict) -> dict:
+    """Plays across every device: the counts add up, the last time is the latest."""
+    out: dict = {}
+    for plays in sources.values():
+        for track, (count, last) in plays.items():
+            old = out.get(track)
+            out[track] = [old[0] + count, max(old[1], last)] if old else [count, last]
+    return out

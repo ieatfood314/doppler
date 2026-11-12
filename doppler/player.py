@@ -117,12 +117,36 @@ class Player:
         self._outbox: dict[str, dict] = {}
         self._outbox_ready = threading.Condition()
         self._dir_cache: dict[str, tuple[float, set]] = {}
+        self.plays: dict[str, list] = {}       # this install's own counts: {track: [count, last played]}
+        self.hub_plays: dict[str, list] = {}   # everyone's, as the hub last said
+        self.hub_plays_rev = -1
+        self.plays_rev = 0                     # for the window: bumped when any count changes
+        self.listen = 0                        # bumped each time a track starts over...
+        self.counted = -1                      # ...and set to it once that listen has been counted
+        self._plays_out: dict[str, list] = {}
         self._load_saved()
+        self.source = self._source()
+        self._plays_out.update({t: list(v) for t, v in self.plays.items()})
 
     # --- small things
 
     def hub_now(self) -> float:
         return time.time() + self.hub_offset
+
+    def _source(self) -> str:
+        """This install's own id for play counts. Unlike the device name, it never repeats."""
+        path = os.path.join(self.state_dir, "source")
+        try:
+            with open(path) as handle:
+                value = handle.read().strip()
+            if value:
+                return value
+        except OSError:
+            pass
+        value = f"{self.device}-{random.getrandbits(48):012x}"
+        with open(path, "w") as handle:
+            handle.write(value)
+        return value
 
     def _load_saved(self):
         try:
@@ -132,6 +156,8 @@ class Player:
             self.library = saved.get("library", {})
             self.library_rev = saved.get("library_rev", "")
             self.hub_state = saved.get("hub_state")
+            self.plays = saved.get("plays", {})
+            self.hub_plays = saved.get("hub_plays", {})
             last = saved.get("current")
             if last in self.sessions:
                 self.current = last
@@ -144,7 +170,8 @@ class Player:
         tmp = os.path.join(self.state_dir, "player.json.tmp")
         with open(tmp, "w") as handle:
             json.dump({"sessions": self.sessions, "library": self.library, "library_rev": self.library_rev,
-                       "hub_state": self.hub_state, "current": self.current}, handle)
+                       "hub_state": self.hub_state, "current": self.current,
+                       "plays": self.plays, "hub_plays": self.hub_plays}, handle)
         os.replace(tmp, os.path.join(self.state_dir, "player.json"))
 
     def bump(self):
@@ -238,10 +265,24 @@ class Player:
         """Deliver reports in the background so a slow network never holds up playback."""
         while True:
             with self._outbox_ready:
-                while not self._outbox:
+                while not self._outbox and not self._plays_out:
                     self._outbox_ready.wait()
-                playlist, item = next(iter(self._outbox.items()))
-                del self._outbox[playlist]
+                plays, self._plays_out = self._plays_out, {}
+                playlist, item = next(iter(self._outbox.items())) if self._outbox else (None, None)
+                if playlist is not None:
+                    del self._outbox[playlist]
+            if plays:
+                try:
+                    reply = self.hub.request("POST", "/api/plays", {"source": self.source, "plays": plays})
+                    self.events.put(("plays", (reply.get("plays") or {}, False)))
+                except OSError:
+                    with self._outbox_ready:
+                        core.merge_plays(self._plays_out, plays)
+            if playlist is None:
+                if plays and self._plays_out:  # couldn't send them: wait a little before trying again
+                    self.events.put(("hub-offline", None))
+                    time.sleep(5)
+                continue
             session = item["session"]
             body = {k: session[k] for k in ("playlist", "index", "position", "playing", "orderHash")}
             body.update(device=self.device, claim=item["claim"], age=time.monotonic() - item["at"])
@@ -276,6 +317,10 @@ class Player:
                     library = self.hub.get("/api/library", timeout=20)
                 rev, wait = state["rev"], 2.0
                 self.events.put(("hub", (state, library, time.time())))
+                if state.get("playsRev", 0) != self.hub_plays_rev:
+                    reply = self.hub.get("/api/plays", timeout=20)
+                    self.hub_plays_rev = reply.get("playsRev", 0)
+                    self.events.put(("plays", (reply.get("plays") or {}, True)))
             except (OSError, KeyError, TypeError):
                 self.events.put(("hub-offline", None))
                 rev = 0
@@ -294,6 +339,39 @@ class Player:
         if self.playing and active and active["device"] != self.device and active["since"] > self.claimed_at:
             self._yield_to(active["device"])
         self.bump()
+
+    def _on_plays(self, plays: dict, everything: bool):
+        """Counts from the hub: all of them, or the ones it just took from us."""
+        if everything:
+            if plays == self.hub_plays:
+                return
+            self.hub_plays = plays
+        elif not core.merge_plays(self.hub_plays, plays):
+            return
+        self.plays_rev += 1
+        self._save()
+        self.bump()
+
+    def _check_play(self, ended: bool = False):
+        """Count the track that's on as played, once per listen, when enough of it has been heard
+        (or it played to its end)."""
+        if not self.current or self.counted == self.listen or not 0 <= self.index < len(self.order):
+            return
+        track = self.order[self.index]
+        if not ended and not (self.playing and core.counts_as_play(self.position(), self.duration(track))):
+            return
+        self.counted = self.listen
+        now = self.hub_now()
+        mine = self.plays.get(track) or [0, 0.0]
+        self.plays[track] = [mine[0] + 1, now]
+        theirs = self.hub_plays.get(track) or [0, 0.0]
+        self.hub_plays[track] = [theirs[0] + 1, now]
+        self.plays_rev += 1
+        if self.hub.base:
+            with self._outbox_ready:
+                self._plays_out[track] = list(self.plays[track])
+                self._outbox_ready.notify()
+        self._save()
 
     def _yield_to(self, device: str):
         """Another device has started playing: stop here, quietly, and leave its session alone."""
@@ -346,6 +424,7 @@ class Player:
             self.message = "Nothing to play there"
             self.bump()
             return {"ok": False, "error": "that playlist has no tracks on this device"}
+        self._check_play()
         mode = self.modes().get(playlist, "shuffle")
         base = None
         if not fresh:
@@ -376,6 +455,7 @@ class Player:
                 self.target = position
                 if self.index != index or track:
                     self.index = index
+                    self.listen += 1
                     self.mpv.set("start", f"{position:.2f}" if position > 0.5 else "none")
                     self.mpv.command("playlist-play-index", index)
                 else:
@@ -404,6 +484,7 @@ class Player:
             handle.write("\n".join(self.locate(t) for t in order) + "\n")
         self.current, self.order, self.index = playlist, order, index
         self.started, self.ended = False, 0
+        self.listen += 1
         self.mpv.set("pause", False)
         self.mpv.set("playlist-start", index)
         self.mpv.set("start", f"{position:.2f}" if position > 0.5 else "none")
@@ -437,6 +518,7 @@ class Player:
     def pause(self):
         if not self.playing:
             return {"ok": True}
+        self._check_play()
         self.playing = False
         self.paused_at = time.monotonic()
         try:
@@ -484,8 +566,11 @@ class Player:
                 session["playing"] = False
                 session["device"] = self.device
             return self.play(self.current)
+        self._check_play()
         if by < 0 and self.position() > 4:
-            return self.seek(0.0)
+            result = self.seek(0.0)
+            self.listen += 1
+            return result
         target = self.index + by
         if target >= len(self.order):
             self._wrap()
@@ -499,6 +584,7 @@ class Player:
         if not self.current or not self.mpv.alive():
             return {"ok": False, "error": "nothing is loaded"}
         position = max(0.0, float(position))
+        self._check_play()
         try:
             self.mpv.command("seek", position, "absolute")
         except RuntimeError:
@@ -552,7 +638,10 @@ class Player:
             prop, value = event.get("name"), event.get("data")
             if prop == "playlist-pos" and isinstance(value, int) and value >= 0 and self.current:
                 if value != self.index and value < len(self.order):
+                    # mpv moving on by itself means the last track played to its end
+                    self._check_play(ended=self.target is None and value == self.index + 1)
                     self.index = value
+                    self.listen += 1
                     if self.target is None:
                         self.target = 0.0
                     self._report()
@@ -567,6 +656,7 @@ class Player:
                     self.message = "None of those files could be opened"
                     self._report()
                 else:
+                    self._check_play(ended=True)
                     self._wrap()
 
     # --- the loop
@@ -612,10 +702,13 @@ class Player:
                         self.bump()
                 elif kind == "reported":
                     self._on_reported(*data)
+                elif kind == "plays":
+                    self._on_plays(*data)
                 elif kind == "quit":
                     break
                 now = time.monotonic()
                 if self.playing and now >= next_beat:
+                    self._check_play()
                     self._report()
                 if now >= next_beat or not self.playing:
                     next_beat = now + HEARTBEAT
@@ -638,6 +731,11 @@ class Player:
         return {"id": track, "title": meta.get("title") or title, "artist": meta.get("artist") or artist,
                 "album": meta.get("album", ""), "duration": meta.get("duration", 0),
                 "art": self.hub.art_url(track) if meta.get("art") and self.hub.base else ""}
+
+    def _plays_of(self, track: str) -> list:
+        """Everyone's count, or this install's own when the hub hasn't heard it yet."""
+        theirs, mine = self.hub_plays.get(track), self.plays.get(track)
+        return max(theirs or [0, 0.0], mine or [0, 0.0])
 
     def view(self) -> dict:
         state = self.hub_state or {}
@@ -681,11 +779,16 @@ class Player:
             "track": self._track_view(track), "index": self.index, "count": len(self.order),
             "position": self.position(), "at": time.time(),
             "slots": slots, "playlists": out, "elsewhere": elsewhere, "message": self.message,
-            "libraryCount": len(self.library),
+            "libraryCount": len(self.library), "playsRev": self.plays_rev,
         }
 
     def tracks_view(self, playlist: str) -> list:
-        return [self._track_view(t) for t in self.tracks_of(playlist)]
+        out = []
+        for track in self.tracks_of(playlist):
+            view = self._track_view(track)
+            view["plays"], view["last"] = self._plays_of(track)
+            out.append(view)
+        return out
 
     def mpris_state(self) -> dict:
         track = self.order[self.index] if self.current and 0 <= self.index < len(self.order) else None

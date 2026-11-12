@@ -8,6 +8,7 @@ object Core {
     val AUDIO_EXTS = setOf("flac", "mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "wma", "aiff", "aif", "wv", "ape", "alac", "mka")
     const val LIVE_WINDOW = 45.0
     const val END_SLACK = 3.0
+    const val PLAY_AFTER = 240.0
 
     private val digits = Regex("(\\d+)")
 
@@ -145,6 +146,22 @@ object Core {
         return i to maxOf(0.0, position)
     }
 
+    /** Half of a track, or four minutes of a long one, counts as a play. */
+    fun countsAsPlay(heard: Double, duration: Double): Boolean =
+        if (duration <= 0) heard >= 30 else heard >= minOf(duration / 2, PLAY_AFTER)
+
+    /** Fold in running play counts, keeping the higher count and the later time; doppler/core.py's
+     * merge_plays. Safe to repeat and to receive out of order. Returns whether anything changed. */
+    fun mergePlays(into: MutableMap<String, Play>, plays: Map<String, Play>): Boolean {
+        var changed = false
+        for ((track, p) in plays) {
+            val old = into[track]
+            val new = if (old == null) p else Play(maxOf(old.count, p.count), maxOf(old.last, p.last))
+            if (new != old) { into[track] = new; changed = true }
+        }
+        return changed
+    }
+
     private val leadingNumber = Regex("^\\d{1,3}\\s*[-.)]\\s*|^\\d{1,3}\\s+(?=\\S)")
 
     fun splitTitle(trackId: String): Pair<String, String> {
@@ -153,6 +170,15 @@ object Core {
         val stem = leadingNumber.replaceFirst(name, "").trim().ifEmpty { name }
         val at = stem.indexOf(" - ")
         return if (at >= 0) stem.substring(0, at).trim() to stem.substring(at + 3).trim() else "" to stem
+    }
+}
+
+/** How often a track has been played, and when last (hub seconds). */
+data class Play(val count: Int, val last: Double) : Comparable<Play> {
+    override fun compareTo(other: Play) = compareValuesBy(this, other, { it.count }, { it.last })
+
+    companion object {
+        val NONE = Play(0, 0.0)
     }
 }
 

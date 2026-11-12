@@ -69,6 +69,7 @@ data class UiState(
     val localCount: Int = 0,
     val libraryCount: Int = 0,
     val customs: List<CustomPlaylist> = emptyList(),
+    val playsRev: Int = 0,
 )
 
 /** Everything the phone does with music. One per process, living on the main thread;
@@ -111,6 +112,15 @@ class Engine private constructor(private val context: Context) {
     private var speakerAllowedUntil = 0L
     private var uiVisible = 0
 
+    private val plays = store.loadPlays("plays.json")          // this phone's own counts
+    private val playsOut = store.loadPlays("plays-out.json")   // ...that the hub hasn't had yet
+    private val hubPlays = store.loadPlays("plays-hub.json")   // everyone's, as the hub last said
+    private var hubPlaysRev = -1L
+    private var playsRev = 0
+    private var listen = 0          // bumped each time a track starts over...
+    private var counted = -1        // ...and set to it once that listen has been counted
+    private var listenTrack: String? = null
+
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state
 
@@ -136,6 +146,10 @@ class Engine private constructor(private val context: Context) {
         exo.shuffleModeEnabled = false
         exo.addListener(object : Player.Listener {
             override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
+                // Moving on by itself means the last track played to its end.
+                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) checkPlay(ended = true)
+                listen++
+                listenTrack = item?.mediaId
                 if (item != null && current != null) {
                     errors = 0
                     report()
@@ -144,6 +158,7 @@ class Engine private constructor(private val context: Context) {
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 if (playWhenReady != playing && current != null) {
+                    if (!playWhenReady) checkPlay()
                     playing = playWhenReady
                     if (!playing) speakerAllowedUntil = maxOf(speakerAllowedUntil, SystemClock.elapsedRealtime() + SPEAKER_GRACE_MS)
                     report(claim = playing)
@@ -152,7 +167,10 @@ class Engine private constructor(private val context: Context) {
             }
 
             override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_ENDED && current != null && playing) wrap()
+                if (state == Player.STATE_ENDED && current != null && playing) {
+                    checkPlay(ended = true)
+                    wrap()
+                }
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -261,7 +279,21 @@ class Engine private constructor(private val context: Context) {
         }
         val active = state.active
         if (playing && active != null && active.device != store.device && active.since > claimedAt) yieldTo(active.device)
+        if (state.playsRev != hubPlaysRev && uiVisible > 0) fetchPlays()
         publish()
+    }
+
+    private fun fetchPlays() {
+        scope.launch {
+            val o = withContext(Dispatchers.IO) { runCatching { hub.json("GET", "/api/plays", timeoutMs = 20_000) }.getOrNull() } ?: return@launch
+            if (!o.has("plays")) return@launch
+            hubPlaysRev = o.optLong("playsRev")
+            hubPlays.clear()
+            hubPlays.putAll(playsFrom(o.optJSONObject("plays")))
+            store.savePlays("plays-hub.json", hubPlays)
+            playsRev++
+            publish()
+        }
     }
 
     private fun offline() {
@@ -298,7 +330,10 @@ class Engine private constructor(private val context: Context) {
             heartbeat = scope.launch {
                 while (isActive && playing) {
                     delay(HEARTBEAT_MS)
-                    if (playing) report()
+                    if (playing) {
+                        checkPlay()
+                        report()
+                    }
                 }
             }
         }
@@ -329,6 +364,9 @@ class Engine private constructor(private val context: Context) {
     fun track(id: String?): Track? = id?.let { library[it] ?: Track.guess(it) }
     fun artUrl(track: Track?): String? = if (track != null && track.art && hub.base.isNotBlank()) hub.artUrl(track.id) else null
     fun isLocal(id: String) = id in local
+
+    /** Everyone's count, or this phone's own when the hub hasn't heard it yet. */
+    fun playsOf(id: String): Play = maxOf(hubPlays[id] ?: Play.NONE, plays[id] ?: Play.NONE)
 
     fun position(): Long = if (current != null && player.mediaItemCount > 0) player.currentPosition else
         ((sessions[current ?: ""]?.position ?: 0.0) * 1000).toLong()
@@ -379,7 +417,7 @@ class Engine private constructor(private val context: Context) {
             slots = slots, playlists = views, elsewhere = elsewhere, hubOnline = hubOnline, hubUrl = hub.base,
             device = store.device, message = message, askSpeaker = askSpeaker, output = Speaker.outputName(context),
             onSpeaker = Speaker.isPhone(context), localCount = local.size, libraryCount = library.size,
-            customs = custom.values.toList(),
+            customs = custom.values.toList(), playsRev = playsRev,
         )
         Widgets.update(context, current, playing, slots)
     }
@@ -445,8 +483,10 @@ class Engine private constructor(private val context: Context) {
             requestPlay(playlist)
             return
         }
+        checkPlay()
         if (by < 0 && player.currentPosition > 4000) {
             player.seekTo(0)
+            listen++
             report()
             return
         }
@@ -456,6 +496,7 @@ class Engine private constructor(private val context: Context) {
 
     fun seek(ms: Long) {
         if (player.mediaItemCount == 0) return
+        checkPlay()
         player.seekTo(ms)
         report()
     }
@@ -467,6 +508,7 @@ class Engine private constructor(private val context: Context) {
             publish()
             return
         }
+        checkPlay()
         val mode = modes()[playlist] ?: "shuffle"
         var base: Session? = null
         if (!fresh) {
@@ -499,6 +541,7 @@ class Engine private constructor(private val context: Context) {
         errors = 0
         if (sameList) {
             if (player.currentMediaItemIndex != index || kotlin.math.abs(player.currentPosition / 1000.0 - position) > 3 || track != null) {
+                if (player.currentMediaItemIndex == index) listen++  // the same track again, from the top
                 player.seekTo(index, (position * 1000).toLong())
             }
         } else {
@@ -566,6 +609,48 @@ class Engine private constructor(private val context: Context) {
         publish()
     }
 
+    // ---------- play counts
+
+    /** Count the track that's on as played, once per listen, when enough of it has been heard
+     * (or it played to its end). */
+    private fun checkPlay(ended: Boolean = false) {
+        if (current == null || counted == listen) return
+        val id = listenTrack ?: return
+        if (!ended) {
+            if (!playing || player.mediaItemCount == 0 || player.currentMediaItem?.mediaId != id) return
+            val d = player.duration.takeIf { it != C.TIME_UNSET && it > 0 }?.let { it / 1000.0 } ?: track(id)?.duration ?: 0.0
+            if (!Core.countsAsPlay(player.currentPosition / 1000.0, d)) return
+        }
+        counted = listen
+        val now = hubNow()
+        val mine = Play((plays[id]?.count ?: 0) + 1, now)
+        plays[id] = mine
+        playsOut[id] = mine
+        hubPlays[id] = Play((hubPlays[id]?.count ?: 0) + 1, now)
+        store.savePlays("plays.json", plays)
+        store.savePlays("plays-out.json", playsOut)
+        playsRev++
+        wake.trySend(Unit)
+    }
+
+    /** Send this phone's running totals; they're absolute, so a resend is harmless. */
+    private suspend fun sendPlays(): Boolean {
+        val sending = HashMap(playsOut)
+        val reply = withContext(Dispatchers.IO) {
+            runCatching {
+                hub.json("POST", "/api/plays", JSONObject().put("source", store.source).put("plays", playsJson(sending)))
+            }.getOrNull()
+        } ?: return false
+        for ((k, v) in sending) if (playsOut[k] == v) playsOut.remove(k)
+        store.savePlays("plays-out.json", playsOut)
+        if (Core.mergePlays(hubPlays, playsFrom(reply.optJSONObject("plays")))) {
+            store.savePlays("plays-hub.json", hubPlays)
+            playsRev++
+            publish()
+        }
+        return true
+    }
+
     // ---------- reporting
 
     private fun report(claim: Boolean = false) {
@@ -583,7 +668,12 @@ class Engine private constructor(private val context: Context) {
 
     private suspend fun sender() {
         while (true) {
-            if (outbox.isEmpty()) wake.receive()
+            if (outbox.isEmpty() && (playsOut.isEmpty() || hub.base.isBlank())) wake.receive()
+            if (playsOut.isNotEmpty() && hub.base.isNotBlank() && !sendPlays()) {
+                offline()
+                withTimeoutOrNull(20_000) { wake.receive() }
+                continue
+            }
             val (playlist, entry) = outbox.entries.firstOrNull()?.toPair() ?: continue
             val session = sessions[playlist]
             if (session == null) {

@@ -150,5 +150,35 @@ class Playlists(unittest.TestCase):
         self.assertFalse(self.hub.set_mode({"playlist": "f:Album", "mode": "sideways"})["ok"])
 
 
+class Plays(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.hub = Hub(self.dir.name, clock=Clock())
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_counts_from_every_device_add_up(self):
+        reply = self.hub.add_plays({"source": "desk-1", "plays": {"1/a.flac": [2, 100.0]}})
+        self.assertEqual(reply["plays"], {"1/a.flac": [2, 100.0]})
+        self.hub.add_plays({"source": "phone-1", "plays": {"1/a.flac": [1, 200.0]}})
+        self.assertEqual(self.hub.plays(), {"1/a.flac": [3, 200.0]})
+
+    def test_a_resent_or_late_report_counts_once(self):
+        self.hub.add_plays({"source": "desk-1", "plays": {"1/a.flac": [2, 100.0]}})
+        rev = self.hub.public()["playsRev"]
+        self.hub.add_plays({"source": "desk-1", "plays": {"1/a.flac": [2, 100.0]}})
+        self.hub.add_plays({"source": "desk-1", "plays": {"1/a.flac": [1, 50.0]}})
+        self.assertEqual(self.hub.plays(), {"1/a.flac": [2, 100.0]})
+        self.assertEqual(self.hub.public()["playsRev"], rev)
+
+    def test_counts_survive_a_restart(self):
+        self.hub.add_plays({"source": "desk-1", "plays": {"1/a.flac": [2, 100.0]}})
+        self.assertEqual(Hub(self.dir.name, clock=Clock()).plays(), {"1/a.flac": [2, 100.0]})
+
+    def test_needs_a_source(self):
+        self.assertFalse(self.hub.add_plays({"plays": {}})["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()

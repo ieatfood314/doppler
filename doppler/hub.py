@@ -33,7 +33,8 @@ class Hub:
         self.path = os.path.join(data_dir, "hub.json")
         os.makedirs(data_dir, exist_ok=True)
         self.changed = threading.Condition()
-        self.state = {"rev": 1, "active": None, "sessions": {}, "slots": {}, "playlists": {}, "modes": {}, "devices": {}}
+        self.state = {"rev": 1, "active": None, "sessions": {}, "slots": {}, "playlists": {}, "modes": {}, "devices": {},
+                      "plays": {}, "playsRev": 0}
         try:
             with open(self.path) as handle:
                 self.state.update(json.load(handle))
@@ -89,7 +90,7 @@ class Hub:
                 "rev": self.state["rev"], "now": self.clock(), "version": __version__,
                 "active": self.state["active"], "sessions": sessions, "slots": self.slots(),
                 "playlists": sorted(self.state["playlists"].values(), key=lambda p: core.natural_key(p["name"])),
-                "modes": self.state["modes"], "devices": self.state["devices"],
+                "modes": self.state["modes"], "devices": self.state["devices"], "playsRev": self.state["playsRev"],
                 "library": {"rev": self.library.rev if self.library else "", "count": len(self._track_ids())},
             }
 
@@ -113,7 +114,28 @@ class Hub:
                     del out["session"]["order"]
             return out
 
+    def plays(self, tracks=None) -> dict:
+        """How often each track has been played, on every device together: {track: [count, last]}."""
+        with self.changed:
+            totals = core.total_plays(self.state["plays"])
+        if tracks is not None:
+            totals = {t: totals[t] for t in tracks if t in totals}
+        return totals
+
     # --- writing
+
+    def add_plays(self, body: dict) -> dict:
+        """A device's running play counts. `source` is that install's own id (not its name, so a
+        reinstall starts a fresh tally instead of being ignored until it catches up)."""
+        source = str(body.get("source") or "").strip()
+        plays = body.get("plays")
+        if not source or not isinstance(plays, dict):
+            return {"ok": False, "error": "source and plays are required"}
+        with self.changed:
+            if core.merge_plays(self.state["plays"].setdefault(source, {}), plays):
+                self.state["playsRev"] += 1
+                self._save()
+        return {"ok": True, "playsRev": self.state["playsRev"], "plays": self.plays(plays.keys())}
 
     def report(self, body: dict) -> dict:
         """A device saying where it is. `claim` means someone just pressed play there, which makes
@@ -345,6 +367,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/wait":
             timeout = min(max(float(query.get("timeout", 50)), 0), 55)
             return self._json(hub.wait(int(query.get("rev", 0)), timeout))
+        if path == "/api/plays":
+            return self._json({"playsRev": hub.state["playsRev"], "plays": hub.plays()})
         if path == "/api/session":
             return self._json(hub.session(query.get("playlist", ""), query.get("have")))
         if path == "/api/library":
@@ -388,6 +412,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.hub.report(body), 200)
         if path == "/api/playlists":
             return self._json(self.hub.put_playlist(None, body))
+        if path == "/api/plays":
+            return self._json(self.hub.add_plays(body))
         if path == "/api/rescan":
             if self.hub.library.scan(force=True):
                 self.hub.library_changed()

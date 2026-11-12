@@ -76,6 +76,17 @@ class CoreTest {
         assertEquals(0 to 50.0, Core.resumePoint(listOf("a", "b"), 0, 50.0, 200.0))
     }
 
+    @Test fun plays() {
+        assertTrue(Core.countsAsPlay(90.0, 180.0))
+        assertFalse(Core.countsAsPlay(89.0, 180.0))
+        assertTrue(Core.countsAsPlay(240.0, 1200.0))
+        val mine = HashMap<String, Play>()
+        assertTrue(Core.mergePlays(mine, mapOf("a" to Play(3, 50.0))))
+        assertFalse(Core.mergePlays(mine, mapOf("a" to Play(3, 50.0))))
+        Core.mergePlays(mine, mapOf("a" to Play(2, 40.0)))
+        assertEquals(Play(3, 50.0), mine["a"])
+    }
+
     companion object {
         const val PY_HASH = "88196cdf38d7"
     }

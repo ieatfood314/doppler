@@ -429,13 +429,18 @@ private fun SlotBadge(slot: String) {
 private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () -> Unit) {
     val view = state.playlists.firstOrNull { it.id == id }
     val tracks = remember(id, state.libraryCount, state.customs) { engine.tracksOf(id).map { engine.track(it)!! } }
+    var find by rememberSaveable(id) { mutableStateOf("") }
+    var sort by remember { mutableStateOf(engine.store.sort) }
+    var choosingSort by remember { mutableStateOf(false) }
+    val q = find.trim().lowercase()
+    val shown = remember(tracks, q, sort, state.playsRev) { sortTracks(engine, tracks.filter { q.isEmpty() || it.matches(q) }, sort) }
     val selected = remember(id) { mutableStateListOf<String>() }
     var adding by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     BackHandler(selected.isNotEmpty()) { selected.clear() }
     Box(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 22.dp)) {
+        LazyColumn(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().padding(horizontal = 22.dp)) {
             item { Header(view?.name ?: "Playlist", back) }
             item {
                 val about = buildString {
@@ -460,16 +465,24 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
                         Pill("Delete") { confirmDelete = true }
                     }
                 }
+                if (tracks.size > 1) Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Field(find, { find = it }, "Find in ${view?.name ?: "this playlist"}", Modifier.weight(1f))
+                    Pill(sortName(sort, view?.custom == true)) { choosingSort = true }
+                }
                 Text(if (view?.custom == true) "Long-press tracks to pick some to remove or copy" else "Long-press tracks to put them in a playlist",
-                    color = Palette.Faint, size = 12, modifier = Modifier.padding(top = 6.dp, bottom = 6.dp))
+                    color = Palette.Faint, size = 12, modifier = Modifier.padding(top = 10.dp, bottom = 6.dp))
+            }
+            if (tracks.isNotEmpty() && shown.isEmpty()) item {
+                Text("Nothing here matches that", color = Palette.Dust, size = 15, modifier = Modifier.padding(vertical = 14.dp))
             }
             if (tracks.isEmpty()) item {
                 Text(if (view?.custom == true) "Empty. Find songs in a folder, long-press them and add them here." else "No music in this folder",
                     color = Palette.Dust, size = 15, modifier = Modifier.padding(vertical = 20.dp))
             }
-            items(tracks, key = { it.id }) { t ->
+            items(shown, key = { it.id }) { t ->
                 val picked = t.id in selected
-                TrackRow(engine, t, state.track?.id == t.id && state.playlist == id, picked,
+                TrackRow(engine, t, state.track?.id == t.id && state.playlist == id, picked, note = sortNote(engine, t, sort),
                     onClick = { if (selected.isNotEmpty()) { if (picked) selected.remove(t.id) else selected.add(t.id) } else engine.requestPlay(id, t.id) },
                     onLong = { if (picked) selected.remove(t.id) else selected.add(t.id) })
             }
@@ -488,6 +501,21 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
             }
         }
     }
+    if (choosingSort) Sheet({ choosingSort = false }) {
+        Text("Sort by", color = Palette.Starlight, size = 22, family = Type.Display, modifier = Modifier.padding(bottom = 8.dp))
+        for (key in SORTS) {
+            val on = key == sort
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
+                sort = key
+                engine.store.sort = key
+                choosingSort = false
+            }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(sortName(key, view?.custom == true), Modifier.weight(1f), color = if (on) Palette.Starlight else Palette.Dust, size = 16,
+                    weight = if (on) FontWeight.Medium else FontWeight.Normal)
+                if (on) Box(Modifier.size(7.dp).clip(CircleShape).background(Palette.Starlight))
+            }
+        }
+    }
     if (adding) AddDialog(engine, state, selected.toList(), { adding = false }) { adding = false; selected.clear() }
     if (renaming && view != null) NameDialog("Rename", view.name, "Rename", { renaming = false }) { name ->
         renaming = false
@@ -500,9 +528,53 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
     }
 }
 
+private val SORTS = listOf("default", "title", "artist", "album", "most", "least", "recent")
+
+private fun sortName(key: String, custom: Boolean) = when (key) {
+    "title" -> "Title"; "artist" -> "Artist"; "album" -> "Album"
+    "most" -> "Most played"; "least" -> "Least played"; "recent" -> "Recently played"
+    else -> if (custom) "Order added" else "File order"
+}
+
+private fun Track.matches(q: String) = title.lowercase().contains(q) || artist.lowercase().contains(q) || album.lowercase().contains(q)
+
+/** Blank names go last; ties keep the playlist's own order (sortedWith is stable). */
+private fun sortTracks(engine: Engine, tracks: List<Track>, sort: String): List<Track> {
+    fun text(f: (Track) -> String) = compareBy<Track> { f(it).isBlank() }.thenBy(Core.natural, f)
+    return when (sort) {
+        "title" -> tracks.sortedWith(text { it.title })
+        "artist" -> tracks.sortedWith(text { it.artist }.then(text { it.album }))
+        "album" -> tracks.sortedWith(text { it.album })
+        "most" -> tracks.sortedByDescending { engine.playsOf(it.id).count }
+        "least" -> tracks.sortedBy { engine.playsOf(it.id).count }
+        "recent" -> tracks.sortedByDescending { engine.playsOf(it.id).last }
+        else -> tracks
+    }
+}
+
+private fun sortNote(engine: Engine, t: Track, sort: String): String? = when (sort) {
+    "most", "least" -> engine.playsOf(t.id).count.let { if (it == 0) "Not played" else if (it == 1) "1 play" else "$it plays" }
+    "recent" -> ago(engine.playsOf(t.id).last)
+    else -> null
+}
+
+private fun ago(seconds: Double): String {
+    if (seconds <= 0) return "Never"
+    val days = ((System.currentTimeMillis() / 1000.0 - seconds) / 86400).toInt()
+    return when {
+        days < 1 -> "Today"
+        days < 2 -> "Yesterday"
+        days < 14 -> "$days days ago"
+        days < 60 -> "${days / 7} weeks ago"
+        days < 365 -> "${days / 30} months ago"
+        days < 730 -> "A year ago"
+        else -> "${days / 365} years ago"
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TrackRow(engine: Engine, t: Track, current: Boolean, selected: Boolean, onClick: () -> Unit, onLong: () -> Unit) {
+private fun TrackRow(engine: Engine, t: Track, current: Boolean, selected: Boolean, note: String? = null, onClick: () -> Unit, onLong: () -> Unit) {
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(if (selected) Palette.Panel else Color.Transparent)
         .combinedClickable(onClick = onClick, onLongClick = onLong).padding(vertical = 10.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically) {
@@ -516,7 +588,8 @@ private fun TrackRow(engine: Engine, t: Track, current: Boolean, selected: Boole
             if (sub.isNotEmpty()) Text(sub, color = Palette.Faint, size = 12, maxLines = 1)
         }
         if (!engine.isLocal(t.id)) Text("streams", color = Palette.Faint, size = 11, modifier = Modifier.padding(horizontal = 8.dp))
-        if (t.duration > 0) Text(clock((t.duration * 1000).toLong()), color = Palette.Faint, size = 12)
+        if (note != null) Text(note, color = Palette.Faint, size = 12)
+        else if (t.duration > 0) Text(clock((t.duration * 1000).toLong()), color = Palette.Faint, size = 12)
     }
 }
 
@@ -627,8 +700,8 @@ private fun Pill(label: String, strong: Boolean = false, color: Color = Palette.
 }
 
 @Composable
-private fun Field(value: String, change: (String) -> Unit, hint: String) {
-    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Palette.Panel).border(1.dp, Palette.Hairline, RoundedCornerShape(14.dp))
+private fun Field(value: String, change: (String) -> Unit, hint: String, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Palette.Panel).border(1.dp, Palette.Hairline, RoundedCornerShape(14.dp))
         .padding(horizontal = 14.dp, vertical = 13.dp)) {
         if (value.isEmpty()) Text(hint, color = Palette.Faint, size = 16, maxLines = 1)
         BasicTextField(value, change, singleLine = true, cursorBrush = SolidColor(Palette.Starlight),

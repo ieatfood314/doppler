@@ -49,7 +49,7 @@ Install the APK from the [latest release](https://github.com/ieatfood314/doppler
 
 ## Using it
 
-On the phone, tap a big numeral to play or pause it, and long-press it to open that playlist (pick a track, change its order, reshuffle, or put another playlist on the slot). **All music** opens the whole library, with search. To make a playlist, long-press tracks to select them, then **Add to playlist**.
+On the phone, tap a big numeral to play or pause it, and long-press it to open that playlist (find or pick a track, sort it by title, artist, album or how often and how recently you've played each song, change its order, reshuffle, or put another playlist on the slot). **All music** opens the whole library, with search. To make a playlist, long-press tracks to select them, then **Add to playlist**.
 
 On a computer:
 
@@ -62,7 +62,9 @@ doppler status             what's playing, where
 doppler ui                 open the window
 ```
 
-In the window, `1` and `2` play, Space pauses, the arrow keys skip, Ctrl+F searches and Esc closes it.
+In the window, `1` and `2` play, Space pauses, the arrow keys skip, Ctrl+F searches (inside a playlist when one is open) and Esc closes it.
+
+A song counts as played once you've heard half of it, or four minutes of a long one. Plays from every device add up, and they're counted offline too.
 
 ### Per-playlist EQ (optional)
 

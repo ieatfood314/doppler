@@ -117,5 +117,27 @@ class Resuming(unittest.TestCase):
         self.assertEqual(core.resume_point(["a", "b"], 0, 50.0, 0), (0, 50.0))
 
 
+class Plays(unittest.TestCase):
+    def test_half_a_track_or_four_minutes_is_a_play(self):
+        self.assertFalse(core.counts_as_play(89, 180))
+        self.assertTrue(core.counts_as_play(90, 180))
+        self.assertTrue(core.counts_as_play(240, 1200))
+        self.assertFalse(core.counts_as_play(239, 1200))
+        self.assertTrue(core.counts_as_play(30, 0), "no duration known: thirty seconds")
+
+    def test_merging_running_totals_is_safe_to_repeat_and_reorder(self):
+        mine = {}
+        self.assertTrue(core.merge_plays(mine, {"a": [3, 50.0]}))
+        self.assertFalse(core.merge_plays(mine, {"a": [3, 50.0]}), "the same send twice changes nothing")
+        core.merge_plays(mine, {"a": [2, 40.0]})
+        self.assertEqual(mine["a"], [3, 50.0], "an older send arriving late changes nothing")
+        core.merge_plays(mine, {"a": [4, 60.0], "b": "junk"})
+        self.assertEqual(mine, {"a": [4, 60.0]})
+
+    def test_totals_add_up_across_devices(self):
+        totals = core.total_plays({"desk": {"a": [3, 50.0]}, "phone": {"a": [2, 70.0], "b": [1, 10.0]}})
+        self.assertEqual(totals, {"a": [5, 70.0], "b": [1, 10.0]})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,16 @@ class Store(context: Context) {
         get() = prefs.getString("device", null) ?: BuildConfig.DEFAULT_DEVICE.ifEmpty { "phone" }
         set(value) = prefs.edit().putString("device", value.trim().ifEmpty { "phone" }).apply()
 
+    /** This install's own id for play counts. Unlike the phone's name, it never repeats. */
+    val source: String
+        get() = prefs.getString("source", null) ?: ("$device-" + java.util.UUID.randomUUID().toString().take(12)).also {
+            prefs.edit().putString("source", it).apply()
+        }
+
+    var sort: String
+        get() = prefs.getString("sort", null) ?: "default"
+        set(value) = prefs.edit().putString("sort", value).apply()
+
     var current: String?
         get() = prefs.getString("current", null)
         set(value) = prefs.edit().putString("current", value).apply()
@@ -59,6 +69,15 @@ class Store(context: Context) {
         write("sessions.json", o.toString())
     }
 
+    /** Play counts by track: "plays.json" (this phone's own), "plays-out.json" (not yet sent),
+     * "plays-hub.json" (everyone's, as the hub last said). */
+    fun loadPlays(name: String): MutableMap<String, Play> {
+        val o = read(name)?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return HashMap()
+        return playsFrom(o)
+    }
+
+    fun savePlays(name: String, plays: Map<String, Play>) = write(name, playsJson(plays).toString())
+
     /** Reports the hub hasn't had yet: playlist -> (claim, wall-clock ms when it happened). */
     fun loadOutbox(): MutableMap<String, Pair<Boolean, Long>> {
         val o = read("outbox.json")?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return HashMap()
@@ -72,4 +91,17 @@ class Store(context: Context) {
         for ((k, v) in outbox) o.put(k, JSONArray().put(v.first).put(v.second))
         write("outbox.json", o.toString())
     }
+}
+
+fun playsFrom(o: JSONObject?): MutableMap<String, Play> {
+    val out = HashMap<String, Play>()
+    if (o == null) return out
+    for (key in o.keys()) o.optJSONArray(key)?.let { out[key] = Play(it.optInt(0), it.optDouble(1, 0.0)) }
+    return out
+}
+
+fun playsJson(plays: Map<String, Play>): JSONObject {
+    val o = JSONObject()
+    for ((k, v) in plays) o.put(k, JSONArray().put(v.count).put(v.last))
+    return o
 }

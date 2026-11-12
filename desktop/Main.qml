@@ -32,8 +32,7 @@ Window {
     property string query: ""
     property var allTracks: []
 
-    FontLoader { id: fraunces; source: "fonts/fraunces.ttf" }
-    FontLoader { id: sans; source: "fonts/schibsted.ttf" }
+    FontLoader { id: sans; source: "fonts/space-grotesk.ttf" }
 
     function call(method, path, body, done) {
         var x = new XMLHttpRequest()
@@ -118,6 +117,36 @@ Window {
     }
 
     // ------------------------------------------------------------ wavefronts
+    // The 1 and the 2 as stars on a 5 by 7 grid, the same grid as the phone's Dots.kt. While lit, the
+    // stars twinkle out of step; the timer only runs then, so a closed or idle window costs nothing.
+    component DotNumeral: Canvas {
+        id: dn
+        property string digit: "1"
+        property color tone: starlight
+        property bool lit: false
+        property real phase: 0
+        readonly property var glyphs: ({
+            "1": ["..#..", ".##..", "#.#..", "..#..", "..#..", "..#..", "#####"],
+            "2": [".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"] })
+        width: height * 5 / 7
+        onToneChanged: requestPaint(); onLitChanged: requestPaint(); onDigitChanged: requestPaint(); onPhaseChanged: requestPaint()
+        Timer { running: dn.lit && dn.visible; repeat: true; interval: 50; onTriggered: dn.phase = (dn.phase + 0.098) % (Math.PI * 2) }
+        onPaint: {
+            var ctx = getContext("2d"); ctx.reset()
+            var pitch = height / 7, rows = glyphs[digit] || glyphs["1"]
+            for (var r = 0; r < 7; r++) for (var c = 0; c < 5; c++) {
+                var x = (c + 0.5) * pitch, y = (r + 0.5) * pitch
+                if (rows[r][c] === "#") {
+                    var tw = lit ? 0.82 + 0.18 * Math.sin(phase + c * 1.7 + r * 2.3) : 1
+                    if (lit) { ctx.fillStyle = Qt.rgba(tone.r, tone.g, tone.b, 0.12 * tw); ctx.beginPath(); ctx.arc(x, y, pitch * 0.5, 0, Math.PI * 2); ctx.fill() }
+                    ctx.fillStyle = Qt.rgba(tone.r, tone.g, tone.b, tone.a * tw); ctx.beginPath(); ctx.arc(x, y, pitch * 0.33, 0, Math.PI * 2); ctx.fill()
+                } else if (height > 40) {
+                    ctx.fillStyle = Qt.rgba(0.29, 0.275, 0.376, 0.45); ctx.beginPath(); ctx.arc(x, y, pitch * 0.07, 0, Math.PI * 2); ctx.fill()
+                }
+            }
+        }
+    }
+
     component Wavefronts: Canvas {
         id: waves
         property color tone: red
@@ -171,21 +200,19 @@ Window {
                     width: parent.width / 2; height: parent.height
                     Wavefronts { anchors.centerIn: numeral; width: numeral.height * 1.3; height: numeral.height * 1.3
                         visible: slotItem.lit; tone: slotColor(slotItem.modelData); toRight: slotItem.modelData === "1" }
-                    Text {
+                    DotNumeral {
                         id: numeral
-                        anchors { horizontalCenter: parent.horizontalCenter; top: parent.top; topMargin: -height * 0.06 }
-                        text: slotItem.modelData
-                        font.family: fraunces.name; font.pixelSize: Math.min(slotItem.height * 0.72, slotItem.width * 0.8)
-                        font.variableAxes: ({ "opsz": 144, "wght": 300, "SOFT": 100, "WONK": 1 })
-                        color: slotItem.lit ? slotColor(slotItem.modelData) : Qt.rgba(0.914, 0.894, 1, st && st.playing ? 0.42 : 0.88)
-                        Behavior on color { ColorAnimation { duration: 220 } }
+                        anchors { horizontalCenter: parent.horizontalCenter; top: parent.top; topMargin: slotItem.height * 0.06 }
+                        digit: slotItem.modelData; lit: slotItem.lit
+                        height: Math.min(slotItem.height * 0.56, slotItem.width * 0.7)
+                        tone: slotItem.lit ? slotColor(slotItem.modelData) : Qt.rgba(0.914, 0.894, 1, st && st.playing ? 0.42 : 0.88)
                     }
                     Column {
-                        anchors { horizontalCenter: parent.horizontalCenter; top: numeral.bottom; topMargin: -numeral.height * 0.08 }
+                        anchors { horizontalCenter: parent.horizontalCenter; top: numeral.bottom; topMargin: numeral.height * 0.1 }
                         width: parent.width * 0.86; spacing: 2
                         Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
                             text: !slotItem.pv ? "Not set" : (slotItem.pv.name === slotItem.modelData ? slotItem.pv.count + " tracks" : slotItem.pv.name); color: starlight
-                            font.family: fraunces.name; font.pixelSize: 26; font.variableAxes: ({ "opsz": 48, "wght": 380, "SOFT": 60 }) }
+                            font.family: sans.name; font.pixelSize: 26; font.weight: Font.Medium }
                         Words { width: parent.width; horizontalAlignment: Text.AlignHCenter; font.pixelSize: 13
                             color: slotItem.lit ? slotColor(slotItem.modelData) : dust
                             text: {
@@ -217,7 +244,7 @@ Window {
         Text { id: npTitle; anchors { left: parent.left; right: controls.left; top: parent.top; rightMargin: 20 }
             elide: Text.ElideRight
             text: nowPlaying.tr ? nowPlaying.tr.title : ""; color: starlight
-            font.family: fraunces.name; font.pixelSize: 26; font.variableAxes: ({ "opsz": 48, "wght": 380, "SOFT": 60 }) }
+            font.family: sans.name; font.pixelSize: 26; font.weight: Font.Medium }
         Words { anchors { left: parent.left; right: controls.left; top: npTitle.bottom; rightMargin: 20 }
             color: dust; font.pixelSize: 14
             text: nowPlaying.tr ? [nowPlaying.tr.artist, st.playlistName].filter(function (s) { return s }).join(", from ") : "" }
@@ -288,7 +315,7 @@ Window {
 
         Item {
             anchors.fill: parent; anchors.margins: 24; visible: openPlaylist === ""
-            Text { id: libTitle; text: "All music"; color: starlight; font.family: fraunces.name; font.pixelSize: 34; font.variableAxes: ({ "opsz": 48, "wght": 380, "SOFT": 60 }) }
+            Text { id: libTitle; text: "All music"; color: starlight; font.family: sans.name; font.pixelSize: 34; font.weight: Font.Medium }
             Words { id: libSub; anchors.top: libTitle.bottom; color: dust; font.pixelSize: 13; text: st ? st.libraryCount + " tracks" : "" }
             Rectangle {
                 id: searchBox; anchors { top: libSub.bottom; left: parent.left; right: parent.right; topMargin: 14 }
@@ -311,14 +338,14 @@ Window {
                     Column {
                         anchors { left: parent.left; right: badge.left; verticalCenter: parent.verticalCenter; leftMargin: 8 + depth * 16 }
                         Words { width: parent.width; text: isTrack ? modelData.title : modelData.name + (modelData.kind === "custom" ? "" : "")
-                            font.pixelSize: isTrack ? 15 : (depth === 0 ? 17 : 15); font.family: !isTrack && depth === 0 ? fraunces.name : sans.name }
+                            font.pixelSize: isTrack ? 15 : (depth === 0 ? 17 : 15); font.family: sans.name; font.weight: !isTrack && depth === 0 ? Font.Medium : Font.Normal }
                         Words { width: parent.width; color: faint; font.pixelSize: 12
                             text: isTrack ? [modelData.artist, modelData.album].filter(function (s) { return s }).join(", ")
                                           : modelData.count + " tracks" + (modelData.kind === "custom" ? ", yours" : "") + (modelData.mode === "order" ? ", in order" : "") }
                     }
                     Rectangle { id: badge; visible: !isTrack && modelData.slot !== ""; width: 26; height: 26; radius: 13; color: "transparent"
                         border.color: slotColor(modelData.slot || "1"); anchors { right: parent.right; verticalCenter: parent.verticalCenter; rightMargin: 6 }
-                        Text { anchors.centerIn: parent; text: modelData.slot || ""; color: slotColor(modelData.slot || "1"); font.family: fraunces.name; font.pixelSize: 16 } }
+                        DotNumeral { anchors.centerIn: parent; height: 12; digit: modelData.slot || "1"; tone: slotColor(modelData.slot || "1") } }
                     MouseArea { id: rowMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                         onClicked: { if (isTrack) { var id = modelData.id; act("/play", { playlist: "f:" + (id.lastIndexOf("/") > 0 ? id.substring(0, id.lastIndexOf("/")) : ""), track: id }) } else showPlaylist(modelData.id) } }
                 }
@@ -336,18 +363,19 @@ Window {
                 MouseArea { anchors.fill: parent; anchors.margins: -6; cursorShape: Qt.PointingHandCursor; onClicked: openPlaylist = "" } }
             Text { id: plTitle; anchors.top: backLink.bottom; anchors.topMargin: 8; width: parent.width; elide: Text.ElideRight
                 visible: !(plPage.pv && plPage.pv.kind === "custom" && renameField.activeFocus)
-                text: plPage.pv ? plPage.pv.name : ""; color: starlight; font.family: fraunces.name; font.pixelSize: 32; font.variableAxes: ({ "opsz": 48, "wght": 380, "SOFT": 60 })
+                text: plPage.pv ? plPage.pv.name : ""; color: starlight; font.family: sans.name; font.pixelSize: 32; font.weight: Font.Medium
                 MouseArea { anchors.fill: parent; enabled: plPage.pv && plPage.pv.kind === "custom"; onClicked: { renameField.text = plPage.pv.name; renameField.forceActiveFocus() } } }
             TextInput { id: renameField; anchors.top: plTitle.top; width: parent.width; visible: activeFocus; color: starlight
-                font.family: fraunces.name; font.pixelSize: 32
+                font.family: sans.name; font.pixelSize: 32; font.weight: Font.Medium
                 onAccepted: { if (text.trim()) hub("PUT", "/api/playlists/" + openPlaylist, { name: text.trim() }); focus = false } }
             Words { id: plSub; anchors.top: plTitle.bottom; color: dust; font.pixelSize: 13
                 text: plPage.pv ? plPage.pv.count + " tracks" + (plPage.pv.kind === "custom" ? ", made by you; click the name to rename" : ", the folder " + plPage.pv.path) : "" }
             Flow {
                 id: plActions; anchors { top: plSub.bottom; left: parent.left; right: parent.right; topMargin: 12 }
             spacing: 8
-                Pill { label: st && st.playing && st.playlist === openPlaylist ? "Pause" : "Play"; strong: true
-                    onClicked: st.playing && st.playlist === openPlaylist ? act("/pause") : act("/play", { playlist: openPlaylist }) }
+                Pill { label: "Play"; strong: true; visible: !(st && st.playing && st.playlist === openPlaylist)
+                    tone: plPage.pv && plPage.pv.slot ? slotColor(plPage.pv.slot) : starlight
+                    onClicked: act("/play", { playlist: openPlaylist }) }
                 Pill { label: "Reshuffle"; onClicked: act("/play", { playlist: openPlaylist, fresh: true }) }
                 Pill { label: plPage.pv && plPage.pv.mode === "order" ? "In order" : "Shuffled"
                     onClicked: hub("PUT", "/api/mode", { playlist: openPlaylist, mode: plPage.pv.mode === "order" ? "shuffle" : "order" }) }

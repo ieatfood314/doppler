@@ -11,7 +11,7 @@ Press **1** and playlist 1 plays, shuffled. Press **2** and playlist 2 plays. Pr
 - **Out of the way.** On a computer it's a background service you drive from a keyboard shortcut or the media keys. The window only exists while you're looking at it.
 - **Careful with the phone's speaker.** The phone asks before playing out loud when nothing is plugged in or connected.
 
-<img src="docs/phone.png" width="300" alt="The phone app playing playlist 1"> <img src="docs/phone-ask.png" width="300" alt="The phone asking before using its speaker">
+<img src="docs/phone.png" width="300" alt="The phone app playing playlist 1">
 
 ## How it fits together
 
@@ -80,4 +80,4 @@ Run `update.sh` in the clone. The hub restarts straight away. The player restart
 
 ## License
 
-MIT. The fonts in `desktop/fonts` and `android/app/src/main/res/font` are [Fraunces](https://github.com/undercasetype/Fraunces) and [Schibsted Grotesk](https://github.com/schibsted/schibsted-grotesk), both under the SIL Open Font License (`desktop/fonts/OFL.txt`).
+MIT. The fonts in `desktop/fonts` and `android/app/src/main/res/font` are [Space Grotesk](https://github.com/floriankarsten/space-grotesk), under the SIL Open Font License (`desktop/fonts/OFL.txt`).

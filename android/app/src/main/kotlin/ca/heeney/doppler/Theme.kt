@@ -23,19 +23,10 @@ object Palette {
 
 @OptIn(ExperimentalTextApi::class)
 object Type {
-    private fun fraunces(weight: Int, opsz: Float, soft: Float, wonk: Float) = Font(
-        R.font.fraunces, FontWeight(weight),
-        variationSettings = FontVariation.Settings(
-            FontVariation.weight(weight), FontVariation.Setting("opsz", opsz),
-            FontVariation.Setting("SOFT", soft), FontVariation.Setting("WONK", wonk)))
+    private fun grotesk(weight: Int, as_: FontWeight = FontWeight(weight)) = Font(
+        R.font.space_grotesk, as_, variationSettings = FontVariation.Settings(FontVariation.weight(weight)))
 
-    /** The numerals: Fraunces at its largest optical size, soft and a little wonky. */
-    val Numeral = FontFamily(fraunces(300, 144f, 100f, 1f))
-    /** Titles and names. */
-    val Display = FontFamily(fraunces(380, 48f, 60f, 0f), fraunces(560, 48f, 60f, 0f))
-    val Sans = FontFamily(
-        Font(R.font.schibsted, FontWeight.Normal, variationSettings = FontVariation.Settings(FontVariation.weight(400))),
-        Font(R.font.schibsted, FontWeight.Medium, variationSettings = FontVariation.Settings(FontVariation.weight(540))),
-        Font(R.font.schibsted, FontWeight.SemiBold, variationSettings = FontVariation.Settings(FontVariation.weight(640))),
-    )
+    /** Titles and names: Space Grotesk a step heavier than the text around it. */
+    val Display = FontFamily(grotesk(500, FontWeight.Normal), grotesk(650, FontWeight.Medium))
+    val Sans = FontFamily(grotesk(400, FontWeight.Normal), grotesk(500, FontWeight.Medium), grotesk(600, FontWeight.SemiBold))
 }

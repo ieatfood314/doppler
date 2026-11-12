@@ -22,6 +22,10 @@ class PlaybackService : MediaSessionService() {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         session = MediaSession.Builder(this, Gate(engine.player, engine)).setSessionActivity(open).build()
         setMediaNotificationProvider(DefaultMediaNotificationProvider.Builder(this).build().apply { setSmallIcon(R.drawable.ic_notification) })
+        // The app drives the player directly rather than through a MediaController, so nothing would ever
+        // ask for this session. Media3 only posts the notification and goes foreground (which is what keeps
+        // the music alive once the app is swiped away) for sessions it has been handed.
+        session?.let { addSession(it) }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = session

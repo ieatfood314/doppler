@@ -218,9 +218,8 @@ private fun SlotBlock(engine: Engine, state: UiState, slot: String, modifier: Mo
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = if (right) Arrangement.End else Arrangement.Start) {
             if (right) SlotWords(state, slot, view, lit, color, TextAlign.End, Modifier.weight(1f).padding(end = 6.dp))
-            androidx.compose.material3.Text(slot, style = TextStyle(fontFamily = Type.Numeral, fontSize = numeral.sp, lineHeight = numeral.sp,
-                color = if (lit) color else Palette.Starlight.copy(alpha = if (state.playing) 0.42f else 0.88f)),
-                modifier = Modifier.padding(horizontal = 4.dp))
+            DotNumeral(slot, (numeral * 0.78f).dp, if (lit) color else Palette.Starlight.copy(alpha = if (state.playing) 0.42f else 0.88f),
+                lit, animate = !reducedMotion(LocalContext.current), modifier = Modifier.padding(horizontal = 10.dp))
             if (!right) SlotWords(state, slot, view, lit, color, TextAlign.Start, Modifier.weight(1f).padding(start = 6.dp))
         }
     }
@@ -421,7 +420,7 @@ private fun PlaylistRow(p: PlaylistView, state: UiState, onClick: () -> Unit) {
 @Composable
 private fun SlotBadge(slot: String) {
     Box(Modifier.size(30.dp).border(1.dp, Palette.slot(slot), CircleShape), contentAlignment = Alignment.Center) {
-        androidx.compose.material3.Text(slot, style = TextStyle(fontFamily = Type.Numeral, fontSize = 18.sp, color = Palette.slot(slot)))
+        DotNumeral(slot, 13.dp, Palette.slot(slot), lit = false, animate = false)
     }
 }
 
@@ -445,9 +444,7 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
                 }
                 Text(about, color = Palette.Dust, size = 14, modifier = Modifier.padding(bottom = 14.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
-                    Pill(if (state.playing && state.playlist == id) "Pause" else "Play", true) {
-                        if (state.playing && state.playlist == id) engine.pause() else engine.requestPlay(id)
-                    }
+                    if (!(state.playing && state.playlist == id)) Pill("Play", true, view?.slot?.let { Palette.slot(it) } ?: Palette.Starlight) { engine.requestPlay(id) }
                     Pill("Reshuffle") { engine.requestPlay(id, fresh = true) }
                     Pill(if (view?.mode == "order") "In order" else "Shuffled") {
                         engine.setMode(id, if (view?.mode == "order") "shuffle" else "order")
@@ -606,7 +603,9 @@ private fun Header(title: String, back: () -> Unit) {
             }
         }
     }
-    Text(title, color = Palette.Starlight, size = 40, family = Type.Display, maxLines = 2, modifier = Modifier.padding(bottom = 4.dp))
+    if (title == "1" || title == "2") DotNumeral(title, 46.dp, Palette.Starlight, lit = false, animate = false,
+        modifier = Modifier.padding(top = 4.dp, bottom = 10.dp).semantics { contentDescription = title })
+    else Text(title, color = Palette.Starlight, size = 40, family = Type.Display, maxLines = 2, modifier = Modifier.padding(bottom = 4.dp))
 }
 
 @Composable

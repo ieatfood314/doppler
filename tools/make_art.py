@@ -1,30 +1,31 @@
 #!/usr/bin/env python3
-"""Writes the drawn assets from tools/glyphs.json (the 1 and 2 of Fraunces at opsz 144, wght 340,
-SOFT 100, WONK 1, pulled out with fontTools): the widget numerals as Android vectors, the app
-icon (Doppler wavefronts) as an Android vector and as the desktop SVG."""
-import json
+"""Writes the drawn assets: the widget numerals (the 1 and 2 as stars on a 5 by 7 grid, the same
+grid as Dots.kt and desktop/Main.qml) as Android vectors, and the app icon (Doppler wavefronts) as an
+Android vector and as the desktop SVG."""
 import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RES = os.path.join(HERE, "..", "android", "app", "src", "main", "res")
-glyphs = json.load(open(os.path.join(HERE, "glyphs.json")))
+DOTS = {
+    "1": ["..#..", ".##..", "#.#..", "..#..", "..#..", "..#..", "#####"],
+    "2": [".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"],
+}
 
 RED, BLUE = "#FF5A3C", "#5B8CFF"
 
 
 def glyph_vector(ch):
-    g = glyphs[ch]
-    x0, y0, x1, y1 = g["bounds"]
-    pad = 40
-    w, h = x1 - x0 + 2 * pad, y1 - y0 + 2 * pad
+    pitch = 10
+    rows = DOTS[ch]
+    w, h = pitch * len(rows[0]), pitch * len(rows)
+    dots = "".join(circle_path((c + 0.5) * pitch, (r + 0.5) * pitch, pitch * 0.33)
+                   for r, row in enumerate(rows) for c, on in enumerate(row) if on == "#")
     return f'''<?xml version="1.0" encoding="utf-8"?>
-<!-- The numeral {ch} from Fraunces (SIL OFL), made by tools/make_art.py. -->
+<!-- The numeral {ch} as stars, made by tools/make_art.py. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="{w / 40:.1f}dp" android:height="{h / 40:.1f}dp"
-    android:viewportWidth="{w:.1f}" android:viewportHeight="{h:.1f}">
-    <group android:translateX="{pad - x0:.1f}" android:translateY="{h - pad + y0:.1f}" android:scaleY="-1">
-        <path android:fillColor="#FFFFFFFF" android:pathData="{g['d']}" />
-    </group>
+    android:width="{w / 2}dp" android:height="{h / 2}dp"
+    android:viewportWidth="{w}" android:viewportHeight="{h}">
+    <path android:fillColor="#FFFFFFFF" android:pathData="{dots}" />
 </vector>
 '''
 

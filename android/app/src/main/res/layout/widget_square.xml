@@ -56,13 +56,14 @@
                 android:autoSizeTextType="uniform" android:autoSizeMinTextSize="9sp" android:autoSizeMaxTextSize="17sp"
                 android:autoSizeStepGranularity="1sp" />
             <TextView android:id="@+id/artist" android:layout_width="match_parent" android:layout_height="17dp"
-                android:layout_marginTop="2dp" android:gravity="bottom|start"
+                android:layout_marginTop="2dp" android:gravity="top|start"
                 android:textSize="12sp" android:textColor="@color/widget_dim" android:fontFamily="@font/space_grotesk"
                 android:maxLines="1" android:ellipsize="end" android:includeFontPadding="false"
                 android:autoSizeTextType="uniform" android:autoSizeMinTextSize="9sp" android:autoSizeMaxTextSize="12sp"
                 android:autoSizeStepGranularity="0.5sp" />
         </LinearLayout>
-        <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="horizontal">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="horizontal"
+            android:padding="4dp">
             <FrameLayout android:id="@+id/prev" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="3"
                 android:background="@drawable/widget_press" android:contentDescription="Back" />
             <FrameLayout android:id="@+id/pause" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="4"
@@ -71,9 +72,9 @@
                 android:background="@drawable/widget_press" android:contentDescription="Skip" />
         </LinearLayout>
         <FrameLayout android:id="@+id/open" android:layout_width="44dp" android:layout_height="44dp" android:layout_gravity="top|end"
-            android:background="@drawable/widget_press" android:contentDescription="Open playlist">
+            android:layout_margin="4dp" android:background="@drawable/widget_press" android:contentDescription="Open playlist">
             <ImageView android:id="@+id/lit" android:layout_width="9.32dp" android:layout_height="13.32dp" android:layout_gravity="top|end"
-                android:layout_marginTop="14dp" android:layout_marginEnd="14dp"
+                android:layout_marginTop="10dp" android:layout_marginEnd="10dp"
                 android:src="@drawable/dots_1" android:tint="@color/nothing_red" android:importantForAccessibility="no" />
         </FrameLayout>
     </FrameLayout>

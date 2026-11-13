@@ -43,7 +43,8 @@ object Widgets {
     private val loader = Executors.newSingleThreadExecutor()
     private var shown: List<Any?>? = null
     private var coverOf: String? = null   // the track the cover below belongs to (or is loading for)
-    private var cover: Bitmap? = null
+    private var cover: Bitmap? = null     // square and unrounded; each widget rounds its own copy (see coverFor)
+    private val roundedCovers = HashMap<Int, Bitmap>()   // by corner radius in bitmap pixels
     @Volatile private var wanted: String? = null   // lets queued loads for skipped songs bow out
     private var missed: Pair<String, Long>? = null  // a cover that didn't load, and when to try again
 
@@ -100,17 +101,21 @@ object Widgets {
         views.setTextViewText(R.id.title, live.title)
         views.setTextViewText(R.id.artist, live.artist)
         views.setViewVisibility(R.id.artist, if (live.artist.isBlank()) View.GONE else View.VISIBLE)
-        val art = cover.takeIf { coverOf == live.track }
-        if (art != null) views.setImageViewBitmap(R.id.cover, art) else views.setImageViewResource(R.id.cover, R.drawable.widget_cover)
+        val hasArt = cover != null && coverOf == live.track
         if (layout == R.layout.widget_square) {
             views.setImageViewResource(R.id.lit, when (live.slot) { "1" -> R.drawable.dots_1; "2" -> R.drawable.dots_2; else -> R.drawable.dots_star })
+            // Corners concentric with the card's: 24dp less the 14dp padding, whatever size the cover is.
+            val side = if (Build.VERSION.SDK_INT >= 31) coverSide(context, live.title) else 72
             if (Build.VERSION.SDK_INT >= 31) {
-                val side = coverSide(context, live.title).toFloat()
-                views.setViewLayoutWidth(R.id.cover, side, TypedValue.COMPLEX_UNIT_DIP)
-                views.setViewLayoutHeight(R.id.cover, side, TypedValue.COMPLEX_UNIT_DIP)
+                views.setViewLayoutWidth(R.id.cover, side.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
+                views.setViewLayoutHeight(R.id.cover, side.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
             }
+            if (hasArt) views.setImageViewBitmap(R.id.cover, coverFor(10f / side))
+            else views.setImageViewResource(R.id.cover, R.drawable.widget_cover_square)
         } else {
             views.setImageViewResource(R.id.lit, when (live.slot) { "1" -> R.drawable.glyph_1; "2" -> R.drawable.glyph_2; else -> R.drawable.glyph_dot })
+            if (hasArt) views.setImageViewBitmap(R.id.cover, coverFor(0.23f))   // about 14dp on a 60dp cover
+            else views.setImageViewResource(R.id.cover, R.drawable.widget_cover)
         }
         val open = Intent(context, MainActivity::class.java).setAction(MainActivity.OPEN).putExtra("playlist", live.playlist)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -194,12 +199,13 @@ object Widgets {
         coverOf = track
         wanted = track
         cover = null
+        roundedCovers.clear()
         val file = engine.localUri(track)
         val url = engine.artUrl(engine.track(track), COVER_PX * 2)
         loader.execute {
             if (wanted != track) return@execute
             val bytes = file?.let { embedded(context, it) } ?: url?.let { fetch(it) }
-            val bitmap = bytes?.let { runCatching { rounded(it) }.getOrNull() }
+            val bitmap = bytes?.let { runCatching { square(it) }.getOrNull() }
             main.post {
                 if (coverOf != track) return@post
                 if (bitmap != null) {
@@ -229,8 +235,20 @@ object Widgets {
         } finally { conn.disconnect() }
     }.getOrNull()
 
-    /** A square, centre-cropped and rounded like the launcher's cards, small enough to hand to the launcher. */
-    private fun rounded(bytes: ByteArray): Bitmap? {
+    /** The cover with corners of [fraction] of its side, made once per size. */
+    private fun coverFor(fraction: Float): Bitmap {
+        val src = cover!!
+        val radius = (COVER_PX * fraction).toInt()
+        return roundedCovers.getOrPut(radius) {
+            val out = Bitmap.createBitmap(COVER_PX, COVER_PX, Bitmap.Config.ARGB_8888)
+            Canvas(out).drawRoundRect(RectF(0f, 0f, COVER_PX.toFloat(), COVER_PX.toFloat()), radius.toFloat(), radius.toFloat(),
+                Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { shader = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP) })
+            out
+        }
+    }
+
+    /** A square, centre-cropped, small enough to hand to the launcher. */
+    private fun square(bytes: ByteArray): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         var sample = 1
@@ -245,9 +263,7 @@ object Widgets {
                 postTranslate(-(src.width - side) / 2f * scale, -(src.height - side) / 2f * scale)
             })
         }
-        val radius = COVER_PX * 0.23f   // about 14dp on a 60dp cover
-        Canvas(out).drawRoundRect(RectF(0f, 0f, COVER_PX.toFloat(), COVER_PX.toFloat()), radius, radius,
-            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { this.shader = shader })
+        Canvas(out).drawRect(0f, 0f, COVER_PX.toFloat(), COVER_PX.toFloat(), Paint(Paint.FILTER_BITMAP_FLAG).apply { this.shader = shader })
         src.recycle()
         return out
     }

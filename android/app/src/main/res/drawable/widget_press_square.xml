@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Press feedback for the 2x2's zones, which sit 4dp in from the card: corners concentric with it. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_pressed="true"><shape android:shape="rectangle"><solid android:color="@color/widget_press" /><corners android:radius="16.3dp" /></shape></item>
+    <item><shape android:shape="rectangle"><solid android:color="#00000000" /></shape></item>
+</selector>

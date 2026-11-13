@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The 2x2's card. The Nothing launcher lays a 2x2 out at about 177dp and draws it at 158dp, so 20.3dp here
+     is the 18.1dp corner of the launcher's own 2x2 cards, measured on the phone. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/widget_bg" />
+    <corners android:radius="20.3dp" />
+</shape>

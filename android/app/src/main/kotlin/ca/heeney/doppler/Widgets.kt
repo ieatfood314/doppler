@@ -104,13 +104,13 @@ object Widgets {
         val hasArt = cover != null && coverOf == live.track
         if (layout == R.layout.widget_square) {
             views.setImageViewResource(R.id.lit, when (live.slot) { "1" -> R.drawable.dots_1; "2" -> R.drawable.dots_2; else -> R.drawable.dots_star })
-            // Corners concentric with the card's: 24dp less the 14dp padding, whatever size the cover is.
-            val side = if (Build.VERSION.SDK_INT >= 31) coverSide(context, live.title) else 72
+            // Corners concentric with the card's: 20.3dp less the 14dp padding, whatever size the cover is.
+            val side = if (Build.VERSION.SDK_INT >= 31) coverSide(context, live.title) else 84
             if (Build.VERSION.SDK_INT >= 31) {
                 views.setViewLayoutWidth(R.id.cover, side.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
                 views.setViewLayoutHeight(R.id.cover, side.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
             }
-            if (hasArt) views.setImageViewBitmap(R.id.cover, coverFor(10f / side))
+            if (hasArt) views.setImageViewBitmap(R.id.cover, coverFor(6.3f / side))
             else views.setImageViewResource(R.id.cover, R.drawable.widget_cover_square)
         } else {
             views.setImageViewResource(R.id.lit, when (live.slot) { "1" -> R.drawable.glyph_1; "2" -> R.drawable.glyph_2; else -> R.drawable.glyph_dot })
@@ -155,7 +155,7 @@ object Widgets {
         views.setViewVisibility(R.id.hours, if (h > 0) View.VISIBLE else View.GONE)
         digit(R.id.h1, h / 10 % 10, h >= 10)
         digit(R.id.h2, h % 10, h > 0)
-        if (Build.VERSION.SDK_INT >= 31) views.setViewLayoutMargin(R.id.hletter, RemoteViews.MARGIN_END, if (showMinutes) 9.9f else 0f, TypedValue.COMPLEX_UNIT_DIP)
+        if (Build.VERSION.SDK_INT >= 31) views.setViewLayoutMargin(R.id.hletter, RemoteViews.MARGIN_END, if (showMinutes) 10.4f else 0f, TypedValue.COMPLEX_UNIT_DIP)
         digit(R.id.m1, m / 10, showMinutes && m >= 10)
         digit(R.id.m2, m % 10, showMinutes)
         views.setViewVisibility(R.id.mletter, if (showMinutes) View.VISIBLE else View.GONE)
@@ -169,7 +169,12 @@ object Widgets {
     private fun coverSide(context: Context, title: String): Int {
         val dm = context.resources.displayMetrics
         val dp = dm.density
-        val inner = 158 - 2 * 14   // the Nothing launcher's 2x2, less padding
+        // The size the launcher lays the widget out at (the Nothing launcher: about 177dp), less padding.
+        val manager = AppWidgetManager.getInstance(context)
+        val options = manager.getAppWidgetIds(ComponentName(context, SquareWidget::class.java)).firstOrNull()?.let { manager.getAppWidgetOptions(it) }
+        val width = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH)?.takeIf { it > 0 } ?: 177
+        val height = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT)?.takeIf { it > 0 } ?: 177
+        val inner = width - 2 * 14
         val paint = TextPaint(TextPaint.ANTI_ALIAS_FLAG).apply {
             typeface = runCatching { context.resources.getFont(R.font.space_grotesk) }.getOrNull()
         }
@@ -177,14 +182,14 @@ object Widgets {
             paint.textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, sp, dm)
             val layout = StaticLayout.Builder.obtain(title, 0, title.length, paint, (inner * dp).toInt())
                 .setLineSpacing(0f, 0.95f).setIncludePad(false).build()
-            val box = inner - cover - 8 - 2 - 17
+            val box = height - 2 * 14 - cover - 8 - 2 - 19
             val unbroken = title.split(" ").all { paint.measureText(it) <= inner * dp }
             return unbroken && layout.height <= box * dp
         }
         return when {
-            fits(72, 14f) -> 72
-            fits(60, 12f) -> 60
-            else -> 48
+            fits(84, 16f) -> 84
+            fits(70, 13f) -> 70
+            else -> 56
         }
     }
 

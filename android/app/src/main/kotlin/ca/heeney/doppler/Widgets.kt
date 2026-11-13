@@ -14,6 +14,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Shader
+import android.graphics.Typeface
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -175,14 +176,12 @@ object Widgets {
         val width = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH)?.takeIf { it > 0 } ?: 177
         val height = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT)?.takeIf { it > 0 } ?: 177
         val inner = width - 2 * 14
-        val paint = TextPaint(TextPaint.ANTI_ALIAS_FLAG).apply {
-            typeface = runCatching { context.resources.getFont(R.font.space_grotesk) }.getOrNull()
-        }
+        val paint = TextPaint(TextPaint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.DEFAULT }   // what the launcher draws it in
         fun fits(cover: Int, sp: Float): Boolean {
             paint.textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, sp, dm)
             val layout = StaticLayout.Builder.obtain(title, 0, title.length, paint, (inner * dp).toInt())
                 .setLineSpacing(0f, 0.95f).setIncludePad(false).build()
-            val box = height - 2 * 14 - cover - 8 - 2 - 19
+            val box = height - 14 - 10 - cover - 8 - 2 - 19
             val unbroken = title.split(" ").all { paint.measureText(it) <= inner * dp }
             return unbroken && layout.height <= box * dp
         }

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The 2x2 widget. Widgets.kt shows "idle" (today's screen time over the 1 and 2) or "live" (cover, title
      and artist over the back, pause and skip zones, with the playing number in the corner).
-     The time is drawn on the stars' own grid: 3.4dp between stars, one empty column between digits. -->
+     The time is drawn on the stars' own grid: 4dp between stars, one empty column between digits. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@android:id/background"
     android:layout_width="match_parent"
@@ -11,36 +11,37 @@
         android:orientation="vertical" android:padding="4dp">
         <FrameLayout android:id="@+id/time" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
             android:background="@drawable/widget_press" android:contentDescription="Screen time">
-            <LinearLayout android:id="@+id/clock" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center"
+            <LinearLayout android:id="@+id/clock" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:layout_gravity="top|center_horizontal" android:layout_marginTop="22dp"
                 android:orientation="horizontal" android:baselineAligned="false" android:importantForAccessibility="no">
                 <LinearLayout android:id="@+id/hours" android:layout_width="wrap_content" android:layout_height="wrap_content"
                     android:orientation="horizontal" android:baselineAligned="false">
-                    <ImageView android:id="@+id/h1" android:layout_width="15.84dp" android:layout_height="22.64dp"
-                        android:layout_marginEnd="4.56dp" android:src="@drawable/dots_1" android:tint="@color/widget_fg" />
-                    <ImageView android:id="@+id/h2" android:layout_width="15.84dp" android:layout_height="22.64dp"
+                    <ImageView android:id="@+id/h1" android:layout_width="18.64dp" android:layout_height="26.64dp" android:visibility="gone"
+                        android:layout_marginEnd="5.36dp" android:src="@drawable/dots_1" android:tint="@color/widget_fg" />
+                    <ImageView android:id="@+id/h2" android:layout_width="18.64dp" android:layout_height="26.64dp"
                         android:src="@drawable/dots_2" android:tint="@color/widget_fg" />
-                    <ImageView android:id="@+id/hletter" android:layout_width="7.92dp" android:layout_height="11.32dp" android:layout_gravity="bottom"
-                        android:layout_marginStart="3.9dp" android:layout_marginEnd="8.4dp"
+                    <ImageView android:id="@+id/hletter" android:layout_width="9.32dp" android:layout_height="13.32dp" android:layout_gravity="bottom"
+                        android:layout_marginStart="4.6dp" android:layout_marginEnd="9.9dp"
                         android:src="@drawable/dots_h" android:tint="@color/widget_dim" />
                 </LinearLayout>
-                <ImageView android:id="@+id/m1" android:layout_width="15.84dp" android:layout_height="22.64dp"
-                    android:layout_marginEnd="4.56dp" android:src="@drawable/dots_4" android:tint="@color/widget_fg" />
-                <ImageView android:id="@+id/m2" android:layout_width="15.84dp" android:layout_height="22.64dp"
+                <ImageView android:id="@+id/m1" android:layout_width="18.64dp" android:layout_height="26.64dp"
+                    android:layout_marginEnd="5.36dp" android:src="@drawable/dots_4" android:tint="@color/widget_fg" />
+                <ImageView android:id="@+id/m2" android:layout_width="18.64dp" android:layout_height="26.64dp"
                     android:src="@drawable/dots_9" android:tint="@color/widget_fg" />
-                <ImageView android:id="@+id/mletter" android:layout_width="7.92dp" android:layout_height="11.32dp" android:layout_gravity="bottom"
-                    android:layout_marginStart="3.9dp" android:src="@drawable/dots_m" android:tint="@color/widget_dim" />
+                <ImageView android:id="@+id/mletter" android:layout_width="9.32dp" android:layout_height="13.32dp" android:layout_gravity="bottom"
+                    android:layout_marginStart="4.6dp" android:src="@drawable/dots_m" android:tint="@color/widget_dim" />
             </LinearLayout>
         </FrameLayout>
         <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
             android:orientation="horizontal">
             <FrameLayout android:id="@+id/slot1" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
                 android:background="@drawable/widget_press" android:contentDescription="Play 1">
-                <ImageView android:layout_width="23.3dp" android:layout_height="33.3dp" android:layout_gravity="center"
+                <ImageView android:layout_width="26.56dp" android:layout_height="37.96dp" android:layout_gravity="bottom|center_horizontal" android:layout_marginBottom="22dp"
                     android:src="@drawable/dots_1" android:tint="@color/widget_fg" android:importantForAccessibility="no" />
             </FrameLayout>
             <FrameLayout android:id="@+id/slot2" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
                 android:background="@drawable/widget_press" android:contentDescription="Play 2">
-                <ImageView android:layout_width="23.3dp" android:layout_height="33.3dp" android:layout_gravity="center"
+                <ImageView android:layout_width="26.56dp" android:layout_height="37.96dp" android:layout_gravity="bottom|center_horizontal" android:layout_marginBottom="22dp"
                     android:src="@drawable/dots_2" android:tint="@color/widget_fg" android:importantForAccessibility="no" />
             </FrameLayout>
         </LinearLayout>

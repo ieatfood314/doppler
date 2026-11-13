@@ -155,7 +155,7 @@ object Widgets {
         views.setViewVisibility(R.id.hours, if (h > 0) View.VISIBLE else View.GONE)
         digit(R.id.h1, h / 10 % 10, h >= 10)
         digit(R.id.h2, h % 10, h > 0)
-        if (Build.VERSION.SDK_INT >= 31) views.setViewLayoutMargin(R.id.hletter, RemoteViews.MARGIN_END, if (showMinutes) 8.4f else 0f, TypedValue.COMPLEX_UNIT_DIP)
+        if (Build.VERSION.SDK_INT >= 31) views.setViewLayoutMargin(R.id.hletter, RemoteViews.MARGIN_END, if (showMinutes) 9.9f else 0f, TypedValue.COMPLEX_UNIT_DIP)
         digit(R.id.m1, m / 10, showMinutes && m >= 10)
         digit(R.id.m2, m % 10, showMinutes)
         views.setViewVisibility(R.id.mletter, if (showMinutes) View.VISIBLE else View.GONE)

@@ -10,6 +10,22 @@ DOTS = {
     "1": ["..#..", ".##..", "#.#..", "..#..", "..#..", "..#..", "#####"],
     "2": [".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"],
 }
+# The square widget writes the screen time and the playing key on the same grid: 0 to 9 (the 1 and 2 are the
+# ones above), and a small H and M after the hours and minutes like the Nothing launcher's own clock widgets.
+TIME = {
+    "0": [".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
+    "1": DOTS["1"],
+    "2": DOTS["2"],
+    "3": [".###.", "#...#", "....#", "..##.", "....#", "#...#", ".###."],
+    "4": ["...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."],
+    "5": ["#####", "#....", "####.", "....#", "....#", "#...#", ".###."],
+    "6": ["..##.", ".#...", "#....", "####.", "#...#", "#...#", ".###."],
+    "7": ["#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..."],
+    "8": [".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."],
+    "9": [".###.", "#...#", "#...#", ".####", "....#", "...#.", ".##.."],
+    "h": ["#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+    "m": ["#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"],
+}
 # The widget's mark for a playlist with no key: one star, on a numeral's grid so it sits the same way.
 DOT = [".....", ".....", ".....", "..#..", ".....", ".....", "....."]
 
@@ -27,6 +43,23 @@ def glyph_vector(ch, rows=None, what=None):
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="{w / 2}dp" android:height="{h / 2}dp"
     android:viewportWidth="{w}" android:viewportHeight="{h}">
+    <path android:fillColor="#FFFFFFFF" android:pathData="{dots}" />
+</vector>
+'''
+
+
+def tight_vector(name, rows):
+    """A glyph whose box is exactly its grid of stars, edge to edge, so layouts can line up the ink itself."""
+    pitch, r = 10, 3.3
+    inset = pitch / 2 - r
+    w, h = pitch * len(rows[0]) - 2 * inset, pitch * len(rows) - 2 * inset
+    dots = "".join(circle_path((c + 0.5) * pitch - inset, (r_ + 0.5) * pitch - inset, r)
+                   for r_, row in enumerate(rows) for c, on in enumerate(row) if on == "#")
+    return f'''<?xml version="1.0" encoding="utf-8"?>
+<!-- {name} as stars, cropped to its grid, made by tools/make_art.py. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="{w / 2:.2f}dp" android:height="{h / 2:.2f}dp"
+    android:viewportWidth="{w:.2f}" android:viewportHeight="{h:.2f}">
     <path android:fillColor="#FFFFFFFF" android:pathData="{dots}" />
 </vector>
 '''
@@ -102,6 +135,9 @@ def write(path, text):
 write(os.path.join(RES, "drawable", "glyph_1.xml"), glyph_vector("1"))
 write(os.path.join(RES, "drawable", "glyph_2.xml"), glyph_vector("2"))
 write(os.path.join(RES, "drawable", "glyph_dot.xml"), glyph_vector("dot", DOT, "One star (a playlist with no key)"))
+for ch, rows in TIME.items():
+    write(os.path.join(RES, "drawable", f"dots_{ch}.xml"), tight_vector(f"The {ch.upper()}", rows))
+write(os.path.join(RES, "drawable", "dots_star.xml"), tight_vector("One star (a playlist with no key)", DOT))
 write(os.path.join(RES, "drawable", "ic_launcher_foreground.xml"), icon_vector())
 write(os.path.join(RES, "drawable", "ic_notification.xml"), mono_vector())
 write(os.path.join(HERE, "..", "desktop", "doppler.svg"), icon_svg())

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- updatePeriodMillis: every half hour the launcher wakes it, and it asks lightcurve for the screen time. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp" android:minHeight="110dp"
+    android:targetCellWidth="2" android:targetCellHeight="2"
+    android:minResizeWidth="110dp" android:minResizeHeight="110dp"
+    android:resizeMode="none" android:widgetCategory="home_screen"
+    android:initialLayout="@layout/widget_square" android:previewLayout="@layout/widget_square"
+    android:description="@string/widget_square" android:updatePeriodMillis="1800000" />

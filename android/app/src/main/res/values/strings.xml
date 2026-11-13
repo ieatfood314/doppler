@@ -3,4 +3,5 @@
     <string name="app_name">doppler</string>
     <string name="widget_wide">1 and 2, side by side</string>
     <string name="widget_tall">1 and 2, one above the other</string>
+    <string name="widget_square">Screen time over 1 and 2</string>
 </resources>

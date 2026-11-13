@@ -82,6 +82,9 @@ class Engine private constructor(private val context: Context) {
             instance ?: Engine(context.applicationContext).also { instance = it; it.start() }
         }
 
+        /** The engine if this process already has one, without starting it. */
+        fun peek(): Engine? = instance
+
         const val HEARTBEAT_MS = 15_000L
         const val SPEAKER_GRACE_MS = 10 * 60_000L
         const val CHANNEL = "speaker"

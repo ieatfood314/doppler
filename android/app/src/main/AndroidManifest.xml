@@ -8,6 +8,11 @@
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
 
+    <!-- lightcurve sends the screen time for the 2x2 widget, and opens from it. -->
+    <queries>
+        <package android:name="ca.heeney.lightcurve" />
+    </queries>
+
     <application
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
@@ -53,6 +58,14 @@
         <receiver android:name=".TallWidget" android:exported="false" android:label="doppler 1 2 (tall)">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_tall" />
+        </receiver>
+        <receiver android:name=".SquareWidget" android:exported="false" android:label="doppler and screen time">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_square" />
+        </receiver>
+        <!-- lightcurve's phone app reports today's screen time here. -->
+        <receiver android:name=".ScreenTimeReceiver" android:exported="true">
+            <intent-filter><action android:name="ca.heeney.lightcurve.TODAY" /></intent-filter>
         </receiver>
     </application>
 </manifest>

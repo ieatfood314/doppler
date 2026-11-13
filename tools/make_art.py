@@ -7,19 +7,20 @@ import os
 HERE = os.path.dirname(os.path.abspath(__file__))
 RES = os.path.join(HERE, "..", "android", "app", "src", "main", "res")
 DOTS = {
-    "1": ["..#..", ".##..", "#.#..", "..#..", "..#..", "..#..", "#####"],
+    "1": ["..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."],
     "2": [".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"],
 }
 # The square widget writes the screen time and the playing key on the same grid: 0 to 9 (the 1 and 2 are the
 # ones above), and a small H and M after the hours and minutes like the Nothing launcher's own clock widgets.
+# The digits are cut like the launcher's clock (Ndot 57), and so are the stars: nearly touching.
 TIME = {
     "0": [".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
     "1": DOTS["1"],
     "2": DOTS["2"],
     "3": [".###.", "#...#", "....#", "..##.", "....#", "#...#", ".###."],
     "4": ["...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."],
-    "5": ["#####", "#....", "####.", "....#", "....#", "#...#", ".###."],
-    "6": ["..##.", ".#...", "#....", "####.", "#...#", "#...#", ".###."],
+    "5": ["#####", "#....", "#....", "####.", "....#", "#...#", ".###."],
+    "6": ["..###", ".#...", "#....", "####.", "#...#", "#...#", ".###."],
     "7": ["#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..."],
     "8": [".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."],
     "9": [".###.", "#...#", "#...#", ".####", "....#", "...#.", ".##.."],
@@ -30,13 +31,15 @@ TIME = {
 DOT = [".....", ".....", ".....", "..#..", ".....", ".....", "....."]
 
 RED, BLUE = "#FF5A3C", "#5B8CFF"
+# A star's radius as a share of the grid pitch: 0.47 leaves a hairline between neighbours, like the clock.
+STAR = 0.47
 
 
 def glyph_vector(ch, rows=None, what=None):
     pitch = 10
     rows = rows or DOTS[ch]
     w, h = pitch * len(rows[0]), pitch * len(rows)
-    dots = "".join(circle_path((c + 0.5) * pitch, (r + 0.5) * pitch, pitch * 0.33)
+    dots = "".join(circle_path((c + 0.5) * pitch, (r + 0.5) * pitch, pitch * STAR)
                    for r, row in enumerate(rows) for c, on in enumerate(row) if on == "#")
     return f'''<?xml version="1.0" encoding="utf-8"?>
 <!-- {what or "The numeral " + ch} as stars, made by tools/make_art.py. -->
@@ -50,7 +53,8 @@ def glyph_vector(ch, rows=None, what=None):
 
 def tight_vector(name, rows):
     """A glyph whose box is exactly its grid of stars, edge to edge, so layouts can line up the ink itself."""
-    pitch, r = 10, 3.3
+    pitch = 10
+    r = pitch * STAR
     inset = pitch / 2 - r
     w, h = pitch * len(rows[0]) - 2 * inset, pitch * len(rows) - 2 * inset
     dots = "".join(circle_path((c + 0.5) * pitch - inset, (r_ + 0.5) * pitch - inset, r)

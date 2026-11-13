@@ -165,7 +165,7 @@ Window {
         property bool lit: false
         property real phase: 0
         readonly property var glyphs: ({
-            "1": ["..#..", ".##..", "#.#..", "..#..", "..#..", "..#..", "#####"],
+            "1": ["..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."],
             "2": [".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"] })
         width: height * 5 / 7
         onToneChanged: requestPaint(); onLitChanged: requestPaint(); onDigitChanged: requestPaint(); onPhaseChanged: requestPaint()

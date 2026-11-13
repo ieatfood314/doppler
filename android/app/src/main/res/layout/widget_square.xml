@@ -18,32 +18,32 @@
                 android:orientation="horizontal" android:baselineAligned="false" android:importantForAccessibility="no">
                 <LinearLayout android:id="@+id/hours" android:layout_width="wrap_content" android:layout_height="wrap_content"
                     android:orientation="horizontal" android:baselineAligned="false">
-                    <ImageView android:id="@+id/h1" android:layout_width="19.57dp" android:layout_height="27.97dp" android:visibility="gone"
-                        android:layout_marginEnd="5.63dp" android:src="@drawable/dots_1" android:tint="@color/widget_fg" />
-                    <ImageView android:id="@+id/h2" android:layout_width="19.57dp" android:layout_height="27.97dp"
+                    <ImageView android:id="@+id/h1" android:layout_width="20.75dp" android:layout_height="29.15dp" android:visibility="gone"
+                        android:layout_marginEnd="4.45dp" android:src="@drawable/dots_1" android:tint="@color/widget_fg" />
+                    <ImageView android:id="@+id/h2" android:layout_width="20.75dp" android:layout_height="29.15dp"
                         android:src="@drawable/dots_2" android:tint="@color/widget_fg" />
-                    <ImageView android:id="@+id/hletter" android:layout_width="9.79dp" android:layout_height="13.99dp" android:layout_gravity="bottom"
-                        android:layout_marginStart="4.83dp" android:layout_marginEnd="10.4dp"
+                    <ImageView android:id="@+id/hletter" android:layout_width="10.37dp" android:layout_height="14.57dp" android:layout_gravity="bottom"
+                        android:layout_marginStart="3.95dp" android:layout_marginEnd="9.52dp"
                         android:src="@drawable/dots_h" android:tint="@color/widget_dim" />
                 </LinearLayout>
-                <ImageView android:id="@+id/m1" android:layout_width="19.57dp" android:layout_height="27.97dp"
-                    android:layout_marginEnd="5.63dp" android:src="@drawable/dots_4" android:tint="@color/widget_fg" />
-                <ImageView android:id="@+id/m2" android:layout_width="19.57dp" android:layout_height="27.97dp"
+                <ImageView android:id="@+id/m1" android:layout_width="20.75dp" android:layout_height="29.15dp"
+                    android:layout_marginEnd="4.45dp" android:src="@drawable/dots_4" android:tint="@color/widget_fg" />
+                <ImageView android:id="@+id/m2" android:layout_width="20.75dp" android:layout_height="29.15dp"
                     android:src="@drawable/dots_9" android:tint="@color/widget_fg" />
-                <ImageView android:id="@+id/mletter" android:layout_width="9.79dp" android:layout_height="13.99dp" android:layout_gravity="bottom"
-                    android:layout_marginStart="4.83dp" android:src="@drawable/dots_m" android:tint="@color/widget_dim" />
+                <ImageView android:id="@+id/mletter" android:layout_width="10.37dp" android:layout_height="14.57dp" android:layout_gravity="bottom"
+                    android:layout_marginStart="3.95dp" android:src="@drawable/dots_m" android:tint="@color/widget_dim" />
             </LinearLayout>
         </FrameLayout>
         <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
             android:orientation="horizontal">
             <FrameLayout android:id="@+id/slot1" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
                 android:background="@drawable/widget_press_square" android:contentDescription="Play 1">
-                <ImageView android:layout_width="27.96dp" android:layout_height="39.96dp" android:layout_gravity="bottom|center_horizontal" android:layout_marginBottom="26dp"
+                <ImageView android:layout_width="29.64dp" android:layout_height="41.64dp" android:layout_gravity="bottom|center_horizontal" android:layout_marginBottom="26dp"
                     android:src="@drawable/dots_1" android:tint="@color/widget_fg" android:importantForAccessibility="no" />
             </FrameLayout>
             <FrameLayout android:id="@+id/slot2" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
                 android:background="@drawable/widget_press_square" android:contentDescription="Play 2">
-                <ImageView android:layout_width="27.96dp" android:layout_height="39.96dp" android:layout_gravity="bottom|center_horizontal" android:layout_marginBottom="26dp"
+                <ImageView android:layout_width="29.64dp" android:layout_height="41.64dp" android:layout_gravity="bottom|center_horizontal" android:layout_marginBottom="26dp"
                     android:src="@drawable/dots_2" android:tint="@color/widget_fg" android:importantForAccessibility="no" />
             </FrameLayout>
         </LinearLayout>
@@ -78,7 +78,7 @@
         </LinearLayout>
         <FrameLayout android:id="@+id/open" android:layout_width="44dp" android:layout_height="44dp" android:layout_gravity="top|end"
             android:layout_margin="4dp" android:background="@drawable/widget_press_square" android:contentDescription="Open playlist">
-            <ImageView android:id="@+id/lit" android:layout_width="10.25dp" android:layout_height="14.65dp" android:layout_gravity="top|end"
+            <ImageView android:id="@+id/lit" android:layout_width="10.87dp" android:layout_height="15.27dp" android:layout_gravity="top|end"
                 android:layout_marginTop="10dp" android:layout_marginEnd="10dp"
                 android:src="@drawable/dots_1" android:tint="@color/nothing_red" android:importantForAccessibility="no" />
         </FrameLayout>

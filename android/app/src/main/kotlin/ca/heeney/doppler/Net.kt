@@ -8,6 +8,8 @@ import android.net.NetworkRequest
 import android.net.TrafficStats
 import android.net.Uri
 import android.os.Process
+import android.os.SystemClock
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
@@ -62,15 +64,15 @@ object Net {
         if (::app.isInitialized) return
         app = context.applicationContext
         // The app's default network (Tailscale's VPN, which copies the metered flag of the network under it)...
-        cm.registerDefaultNetworkCallback(Watch())
+        cm.registerDefaultNetworkCallback(Watch(real = false))
         // ...and the real networks, so losing the Wi-Fi itself counts straight away, before Tailscale moves over.
-        cm.registerNetworkCallback(NetworkRequest.Builder().build(), Watch())
+        cm.registerNetworkCallback(NetworkRequest.Builder().build(), Watch(real = true))
         recompute()
     }
 
-    private class Watch : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) { recompute() }
-        override fun onLost(network: Network) { recompute() }
+    private class Watch(private val real: Boolean) : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) { if (real) networksChanged() else recompute() }
+        override fun onLost(network: Network) { if (real) networksChanged() else recompute() }
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) { recompute() }
     }
 
@@ -91,9 +93,12 @@ object Net {
                 !c.hasTransport(NetworkCapabilities.TRANSPORT_VPN) && !c.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
                     (c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || c.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) &&
                     c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                    c.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+                    c.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) &&
+                    // Wi-Fi without working internet (a captive portal, a dead router) leaves Android routing over
+                    // cellular, Tailscale included, so only Wi-Fi that Android has checked counts.
+                    c.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
             }
-            activeOk && wifi
+            activeOk && wifi && !tripped
         }.getOrDefault(false)
         val was = _free.value
         if (was && !now) {
@@ -106,6 +111,48 @@ object Net {
         _free.value = now
         if (was != now) synchronized(listeners) { listeners.toList() }.forEach { it(now) }
         return now
+    }
+
+    // ---------- the tripwire: what the phone's cellular counter actually does
+
+    @Volatile private var tripped = false
+    private var tripStart = 0L
+    private var tripMobile = -1L
+    private var tripOurs = 0L
+
+    /** A Wi-Fi network came or went: the flags get another chance. */
+    @Synchronized
+    private fun networksChanged() {
+        if (tripped) Log.i(Engine.TAG, "networks changed: trusting the network flags again")
+        tripped = false
+        tripMobile = -1
+        recompute()
+    }
+
+    /** Called with every chunk downloaded while on Wi-Fi. The flags say Wi-Fi, but if the phone's cellular
+     * counter grows by half as much as the app downloads, the bytes are really coming over mobile data
+     * (however the VPN or Android got it wrong), so everything stops until the networks change. */
+    @Synchronized
+    fun downloaded(bytes: Int) {
+        if (tripped || bytes <= 0) return
+        val now = SystemClock.elapsedRealtime()
+        if (tripMobile < 0 || now - tripStart > 30_000) {
+            tripMobile = TrafficStats.getMobileRxBytes()
+            tripStart = now
+            tripOurs = 0
+            return
+        }
+        tripOurs += bytes
+        if (tripOurs < 512 * 1024) return
+        val mobile = TrafficStats.getMobileRxBytes()
+        if (mobile >= 0 && mobile - tripMobile >= tripOurs / 2) {
+            Log.i(Engine.TAG, "tripwire: ${tripOurs / 1024} KB downloaded and cellular grew ${(mobile - tripMobile) / 1024} KB; stopping")
+            tripped = true
+            recompute()
+        }
+        tripMobile = mobile
+        tripStart = now
+        tripOurs = 0
     }
 
     fun holdWhileOnWifi(conn: HttpURLConnection) = wifiOnly.add(conn)
@@ -188,7 +235,7 @@ class WifiOnlySource(private val upstream: DataSource, private val wait: Boolean
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         if (!Net.free) throw NotOnWifi()
-        return upstream.read(buffer, offset, length)
+        return upstream.read(buffer, offset, length).also { Net.downloaded(it) }
     }
 
     override fun getUri(): Uri? = upstream.uri

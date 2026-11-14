@@ -131,6 +131,7 @@ class Hub(val base: String) {
                     if (!progress && !Net.free) throw NotOnWifi()
                     val n = s.read(chunk)
                     if (n < 0) break
+                    if (onWifi) Net.downloaded(n)
                     bytes.write(chunk, 0, n)
                 }
             }

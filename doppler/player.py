@@ -207,8 +207,14 @@ class Player:
         slots.update((self.hub_state or {}).get("slots", {}))
         return slots
 
+    def tagged(self):
+        """Every artist and album, worked out again only when the library changes."""
+        if getattr(self, "_tagged", (None,))[0] is not self.library:
+            self._tagged = (self.library, core.tagged(self.library))
+        return self._tagged[1]
+
     def tracks_of(self, playlist: str) -> list[str]:
-        return core.playlist_tracks(playlist, list(self.library), self.custom())
+        return core.playlist_tracks(playlist, list(self.library), self.custom(), self.library)
 
     def duration(self, track: str) -> float:
         return float((self.library.get(track) or {}).get("duration") or 0)
@@ -749,6 +755,10 @@ class Player:
             playlists.append((playlist, "folder", len(folder_map[playlist])))
         for playlist, entry in custom.items():
             playlists.append((playlist, "custom", len(self.tracks_of(playlist))))
+        artists, albums = self.tagged()
+        for kind, found in (("artist", artists), ("album", albums)):
+            for playlist in sorted(found, key=lambda p: core.natural_key(p[2:])):
+                playlists.append((playlist, kind, len(found[playlist])))
         out = []
         for playlist, kind, count in playlists:
             session = self.sessions.get(playlist) if (self.sessions.get(playlist) or {}).get("unsent") else None
@@ -760,6 +770,7 @@ class Player:
                          "index": session["index"], "track": self._track_view(track)}
             out.append({"id": playlist, "kind": kind, "name": core.playlist_name(playlist, custom),
                         "path": playlist[2:] if kind == "folder" else "", "count": count,
+                        "by": core.album_by(playlist, albums[playlist], self.library) if kind == "album" else "",
                         "slot": by_slot.get(playlist, ""), "mode": self.modes().get(playlist, "shuffle"),
                         "session": where})
         active = state.get("active")

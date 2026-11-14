@@ -28,6 +28,29 @@ class CoreTest {
         assertEquals(listOf("2/x.mp3", "1/a.flac"), Core.playlistTracks("c:1", tracks, custom))
     }
 
+    @Test fun artistsAndAlbumsFromTags() {
+        fun t(id: String, artist: String, albumArtist: String, album: String, n: Int) = Track(id, id, artist, album, 0.0, false, albumArtist, n)
+        val tags = listOf(
+            t("1/a.flac", "Queen", "Queen", "Greatest Hits", 2), t("1/b.flac", "Aerosmith", "Aerosmith", "Greatest Hits", 1),
+            t("1/c.flac", "queen ", "Queen", "greatest hits", 1), t("1/d.flac", "Queen", "Queen", "Greatest Hits", 3),
+            t("2/x.mp3", "Claude Werner", "", "SuperTuxKart", 0), t("2/y.mp3", "Geek Penguin", "", "SuperTuxKart", 0),
+            t("2/z.mp3", "Daft Punk feat. Pharrell", "Daft Punk", "", 0),
+        ).associateBy { it.id }
+        val ids = tags.keys
+        val (artists, albums) = Core.tagged(tags)
+        assertEquals(setOf("b:Greatest Hits\tQueen", "b:Greatest Hits\tAerosmith", "b:SuperTuxKart"), albums.keys)
+        assertEquals(listOf("1/c.flac", "1/a.flac", "1/d.flac"), albums["b:Greatest Hits\tQueen"])
+        assertEquals(listOf("1/c.flac", "1/a.flac", "1/d.flac"), Core.playlistTracks("b:greatest HITS\tqueen", ids, emptyMap(), tags))
+        assertEquals(listOf("2/x.mp3", "2/y.mp3"), Core.playlistTracks("b:SuperTuxKart", ids, emptyMap(), tags))
+        assertEquals(listOf("1/c.flac", "1/a.flac", "1/d.flac"), Core.playlistTracks("a:QUEEN", ids, emptyMap(), tags))
+        assertEquals(listOf("2/z.mp3"), Core.playlistTracks("a:Daft Punk", ids, emptyMap(), tags))
+        assertTrue("a:Queen" in artists)
+        assertFalse("a:queen" in artists)
+        assertEquals("Greatest Hits", Core.playlistName("b:Greatest Hits\tQueen", emptyMap()))
+        assertEquals("Various artists", Core.albumBy("b:SuperTuxKart", albums["b:SuperTuxKart"]!!, tags))
+        assertEquals("Queen", Core.albumBy("b:Greatest Hits\tQueen", emptyList(), tags))
+    }
+
     @Test fun slots() {
         assertEquals(mapOf("1" to "f:1", "2" to "f:2"), Core.defaultSlots(Core.folders(tracks).keys))
         assertEquals(mapOf("1" to "f:Jazz", "2" to "f:Rock"), Core.defaultSlots(setOf("f:", "f:Rock", "f:Jazz", "f:Jazz/Live")))

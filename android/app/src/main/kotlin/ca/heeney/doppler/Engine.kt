@@ -46,10 +46,13 @@ data class PendingPlay(val playlist: String, val track: String?, val fresh: Bool
 
 data class Elsewhere(val device: String, val playlist: String, val name: String, val playing: Boolean, val track: Track?)
 
+/** `kind` is folder, custom, artist or album; `by` is who an album is by. */
 data class PlaylistView(
-    val id: String, val name: String, val path: String, val custom: Boolean, val count: Int, val slot: String,
-    val mode: String, val lastTrack: Track?, val lastDevice: String?, val lastPlaying: Boolean,
-)
+    val id: String, val name: String, val path: String, val kind: String, val count: Int, val slot: String,
+    val mode: String, val lastTrack: Track?, val lastDevice: String?, val lastPlaying: Boolean, val by: String = "",
+) {
+    val custom get() = kind == "custom"
+}
 
 data class UiState(
     val ready: Boolean = false,
@@ -406,7 +409,19 @@ class Engine private constructor(private val context: Context) {
         return out
     }
 
-    fun tracksOf(playlist: String) = Core.playlistTracks(playlist, library.keys, custom())
+    fun tracksOf(playlist: String) = Core.playlistTracks(playlist, library.keys, custom(), library)
+
+    private var taggedFor: Map<String, Track>? = null
+    private var taggedCache: Pair<Map<String, List<String>>, Map<String, List<String>>> = emptyMap<String, List<String>>() to emptyMap()
+
+    /** Every artist and album, worked out again only when the library changes. */
+    private fun tagged(): Pair<Map<String, List<String>>, Map<String, List<String>>> {
+        if (taggedFor !== library) {
+            taggedCache = Core.tagged(library)
+            taggedFor = library
+        }
+        return taggedCache
+    }
     fun track(id: String?): Track? = id?.let { library[it] ?: Track.guess(it) }
     fun artUrl(track: Track?, size: Int = 640): String? = if (track != null && track.art && hub.base.isNotBlank()) hub.artUrl(track.id, size) else null
     fun isLocal(id: String) = id in local
@@ -441,12 +456,21 @@ class Engine private constructor(private val context: Context) {
         }
         for (id in folderMap.keys.sortedWith(compareBy(Core.natural) { it.substring(2) })) {
             val (t, d, p) = last(id)
-            views.add(PlaylistView(id, Core.playlistName(id, custom), id.substring(2), false, folderMap[id]!!.size, bySlot[id] ?: "",
+            views.add(PlaylistView(id, Core.playlistName(id, custom), id.substring(2), "folder", folderMap[id]!!.size, bySlot[id] ?: "",
                 modes()[id] ?: "shuffle", track(t), d, p))
         }
         for ((id, c) in custom) {
             val (t, d, p) = last(id)
-            views.add(PlaylistView(id, c.name, "", true, tracksOf(id).size, bySlot[id] ?: "", modes()[id] ?: "shuffle", track(t), d, p))
+            views.add(PlaylistView(id, c.name, "", "custom", tracksOf(id).size, bySlot[id] ?: "", modes()[id] ?: "shuffle", track(t), d, p))
+        }
+        val (artists, albums) = tagged()
+        for ((kind, found) in listOf("artist" to artists, "album" to albums)) {
+            for (id in found.keys.sortedWith(compareBy(Core.natural) { it.substring(2) })) {
+                val (t, d, p) = last(id)
+                val by = if (kind == "album") Core.albumBy(id, found[id]!!, library) else ""
+                views.add(PlaylistView(id, Core.playlistName(id, custom), "", kind, found[id]!!.size, bySlot[id] ?: "",
+                    modes()[id] ?: "shuffle", track(t), d, p, by))
+            }
         }
         val active = hubState?.active
         var elsewhere: Elsewhere? = null

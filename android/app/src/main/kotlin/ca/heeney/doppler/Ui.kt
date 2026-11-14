@@ -90,6 +90,7 @@ private sealed interface Screen {
     data object Home : Screen
     data object Library : Screen
     data class Playlist(val id: String) : Screen
+    data class Browse(val kind: String) : Screen
     data object Settings : Screen
 }
 
@@ -114,6 +115,7 @@ fun App(engine: Engine, askFiles: () -> Unit, opening: String? = null, opened: (
                 Screen.Home -> Home(engine, state, open = { stack.add(it) })
                 Screen.Library -> Library(engine, state, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
                 is Screen.Playlist -> PlaylistPage(engine, state, s.id, back = { stack.removeAt(stack.lastIndex) })
+                is Screen.Browse -> BrowsePage(state, s.kind, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
                 Screen.Settings -> SettingsPage(engine, state, askFiles, back = { stack.removeAt(stack.lastIndex) })
             }
         }
@@ -376,6 +378,13 @@ private fun Library(engine: Engine, state: UiState, open: (Screen) -> Unit, back
             it.title.lowercase().contains(q) || it.artist.lowercase().contains(q) || it.album.lowercase().contains(q)
         }.take(80)
     }
+    val named = remember(q, state.playlists) {
+        if (q.length < 2) emptyList() else state.playlists.filter {
+            (it.kind == "artist" || it.kind == "album") && (it.name.lowercase().contains(q) || it.by.lowercase().contains(q))
+        }
+    }
+    val artists = named.filter { it.kind == "artist" }.take(4)
+    val albums = named.filter { it.kind == "album" }.take(6)
     LazyColumn(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().padding(horizontal = 22.dp)) {
         item { Header("All music", back) }
         item {
@@ -383,9 +392,18 @@ private fun Library(engine: Engine, state: UiState, open: (Screen) -> Unit, back
             else "${state.libraryCount} tracks, ${state.localCount} of them on this phone"
             Text(sub, color = Palette.Dust, size = 14, modifier = Modifier.padding(bottom = 16.dp))
             Field(query, { query = it }, "Find a song, artist or album")
+            if (q.length < 2 && state.libraryCount > 0) Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Pill("Artists") { open(Screen.Browse("artist")) }
+                Pill("Albums") { open(Screen.Browse("album")) }
+            }
         }
         if (q.length >= 2) {
-            if (matches.isEmpty()) item { Text("No song matches that", color = Palette.Dust, size = 15, modifier = Modifier.padding(vertical = 14.dp)) }
+            if (matches.isEmpty() && named.isEmpty()) item { Text("Nothing matches that", color = Palette.Dust, size = 15, modifier = Modifier.padding(vertical = 14.dp)) }
+            if (artists.isNotEmpty()) item { Section("Artists") }
+            items(artists, key = { "a" + it.id }) { p -> PlaylistRow(p, state) { open(Screen.Playlist(p.id)) } }
+            if (albums.isNotEmpty()) item { Section("Albums") }
+            items(albums, key = { "b" + it.id }) { p -> PlaylistRow(p, state) { open(Screen.Playlist(p.id)) } }
+            if (named.isNotEmpty() && matches.isNotEmpty()) item { Section("Songs") }
             items(matches, key = { "m" + it.id }) { t ->
                 TrackRow(engine, t, state.track?.id == t.id, selected = false, onClick = {
                     engine.requestPlay("f:" + t.id.substringBeforeLast("/", ""), t.id)
@@ -393,7 +411,7 @@ private fun Library(engine: Engine, state: UiState, open: (Screen) -> Unit, back
             }
         } else {
             item { Section("Folders") }
-            items(state.playlists.filter { !it.custom }, key = { it.id }) { p -> PlaylistRow(p, state) { open(Screen.Playlist(p.id)) } }
+            items(state.playlists.filter { it.kind == "folder" }, key = { it.id }) { p -> PlaylistRow(p, state) { open(Screen.Playlist(p.id)) } }
             item { Section("Your playlists") }
             items(state.playlists.filter { it.custom }, key = { it.id }) { p -> PlaylistRow(p, state) { open(Screen.Playlist(p.id)) } }
             item {
@@ -416,15 +434,30 @@ private fun Library(engine: Engine, state: UiState, open: (Screen) -> Unit, back
     }
 }
 
+/** Every artist, or every album, in the library. */
+@Composable
+private fun BrowsePage(state: UiState, kind: String, open: (Screen) -> Unit, back: () -> Unit) {
+    val shown = remember(state.playlists, kind) { state.playlists.filter { it.kind == kind } }
+    LazyColumn(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 22.dp)) {
+        item { Header(if (kind == "artist") "Artists" else "Albums", back) }
+        item {
+            Text(if (shown.isEmpty()) "None yet: they come from the songs' tags" else "${shown.size}", color = Palette.Dust, size = 14,
+                modifier = Modifier.padding(bottom = 10.dp))
+        }
+        items(shown, key = { it.id }) { p -> PlaylistRow(p, state) { open(Screen.Playlist(p.id)) } }
+        item { Spacer(Modifier.height(40.dp)) }
+    }
+}
+
 @Composable
 private fun PlaylistRow(p: PlaylistView, state: UiState, onClick: () -> Unit) {
-    val depth = if (p.custom || p.path.isEmpty()) 0 else p.path.count { it == '/' }
+    val depth = if (p.kind != "folder" || p.path.isEmpty()) 0 else p.path.count { it == '/' }
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick)
         .padding(start = (depth * 18).dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(p.name, color = Palette.Starlight, size = if (depth == 0) 18 else 16, family = if (depth == 0) Type.Display else Type.Sans, maxLines = 1)
             val playingHere = state.playing && state.playlist == p.id
-            Text(if (playingHere) "Playing" else "${p.count} tracks" + if (p.mode == "order") ", in order" else "",
+            Text(if (playingHere) "Playing" else (if (p.by.isNotEmpty()) "${p.by}, " else "") + (if (p.count == 1) "1 track" else "${p.count} tracks") + if (p.mode == "order") ", in order" else "",
                 color = if (playingHere) Palette.slot(p.slot.ifEmpty { "1" }) else Palette.Faint, size = 12)
         }
         if (p.slot.isNotEmpty()) SlotBadge(p.slot)
@@ -474,6 +507,7 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
                     append(if (tracks.size == 1) "1 track" else "${tracks.size} tracks")
                     if (view?.mode == "order") append(", in order")
                     if (custom) append(", made by you")
+                    else if (view != null && view.by.isNotEmpty()) append(", by ${view.by}")
                     else if (view != null && view.path.isNotEmpty() && view.path != view.name) append(", from ${view.path}")
                 }
                 Text(about, color = Palette.Dust, size = 14)
@@ -494,7 +528,11 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
                 Text("Nothing here matches that", color = Palette.Dust, size = 15, modifier = Modifier.padding(vertical = 14.dp))
             }
             if (tracks.isEmpty()) item {
-                Text(if (view?.custom == true) "Empty. Find songs in a folder, long-press them and add them here." else "No music in this folder",
+                Text(when (view?.kind) {
+                    "custom" -> "Empty. Find songs in a folder, long-press them and add them here."
+                    "folder", null -> "No music in this folder"
+                    else -> "No music left here"
+                },
                     color = Palette.Dust, size = 15, modifier = Modifier.padding(vertical = 20.dp))
             }
             items(shown, key = { it.id }) { t ->
@@ -532,7 +570,7 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
                 engine.store.sort = key
                 choosingSort = false
             }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(sortName(key, view?.custom == true), Modifier.weight(1f), color = if (on) Palette.Starlight else Palette.Dust, size = 16,
+                Text(sortName(key, view?.kind), Modifier.weight(1f), color = if (on) Palette.Starlight else Palette.Dust, size = 16,
                     weight = if (on) FontWeight.Medium else FontWeight.Normal)
                 if (on) Box(Modifier.size(7.dp).clip(CircleShape).background(Palette.Starlight))
             }
@@ -563,10 +601,10 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
 
 private val SORTS = listOf("default", "title", "artist", "album", "most", "least", "recent")
 
-private fun sortName(key: String, custom: Boolean) = when (key) {
+private fun sortName(key: String, kind: String?) = when (key) {
     "title" -> "Title"; "artist" -> "Artist"; "album" -> "Album"
     "most" -> "Most played"; "least" -> "Least played"; "recent" -> "Recently played"
-    else -> if (custom) "Order added" else "File order"
+    else -> when (kind) { "custom" -> "Order added"; "artist", "album" -> "Album order"; else -> "File order" }
 }
 
 private fun Track.matches(q: String) = title.lowercase().contains(q) || artist.lowercase().contains(q) || album.lowercase().contains(q)

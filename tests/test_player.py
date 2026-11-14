@@ -52,3 +52,20 @@ class Counting(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Tagged(unittest.TestCase):
+    def test_artists_and_albums_are_listed_and_playable(self):
+        with tempfile.TemporaryDirectory() as d:
+            config = {"hub": "", "device": "desk", "root": "", "eq": {}, "port": 0}
+            p = Player(config, d + "/state", d + "/run")
+            p.library = {
+                "1/a.flac": {"id": "1/a.flac", "title": "A", "artist": "Queen", "albumartist": "Queen", "album": "Jazz", "n": 2},
+                "2/b.flac": {"id": "2/b.flac", "title": "B", "artist": "Queen", "albumartist": "Queen", "album": "Jazz", "n": 1},
+            }
+            self.assertEqual(p.tracks_of("b:Jazz\tQueen"), ["2/b.flac", "1/a.flac"])
+            self.assertEqual(p.tracks_of("a:queen"), ["2/b.flac", "1/a.flac"])
+            listed = {v["id"]: v for v in p.view()["playlists"]}
+            self.assertEqual(listed["a:Queen"]["kind"], "artist")
+            self.assertEqual((listed["b:Jazz\tQueen"]["name"], listed["b:Jazz\tQueen"]["by"]), ("Jazz", "Queen"))
+            self.assertEqual(listed["f:1"]["by"], "")

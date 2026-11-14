@@ -18,7 +18,7 @@ HELP = """doppler: two playlists, one keypress, the same place on every device
   doppler 1 | 2            play that playlist where it was left, or pause it if it's playing
   doppler toggle           play or pause
   doppler next | prev      skip
-  doppler play NAME        play a folder (or a playlist you made) by name
+  doppler play NAME        play a folder, artist, album or playlist you made, by name
   doppler status           what's playing, here and elsewhere
   doppler ui               open the window
   doppler connect URL      point this computer's player at a hub

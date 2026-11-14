@@ -6,7 +6,7 @@ Two playlists, one keypress each, and they follow you between your computer and 
 
 Press **1** and playlist 1 plays, shuffled. Press **2** and playlist 2 plays. Press the same key again to pause. Each playlist remembers its own shuffle and where you were in it, on every device: start 1 on your phone on the bus, press Ctrl+1 at your desk, and it carries on from the same song at the same second (the phone pauses itself).
 
-- **A folder is a playlist.** Every folder in your music library is one, with no m3u files to keep up to date. Slots 1 and 2 start out as the folders named `1` and `2`. You can make your own playlists from any tracks, and put any playlist on either slot.
+- **A folder is a playlist.** Every folder in your music library is one, with no m3u files to keep up to date. So is every artist and every album, from the files' tags. Slots 1 and 2 start out as the folders named `1` and `2`. You can make your own playlists from any tracks, and put any playlist on either slot.
 - **Untouched audio.** The file goes straight to the output: no volume scaling, ReplayGain, resampling filter or normalisation, on either side. A 24-bit FLAC stays 24-bit.
 - **Out of the way.** On a computer it's a background service you drive from a keyboard shortcut or the media keys. The window only exists while you're looking at it.
 - **Careful with the phone's speaker.** The phone asks before playing out loud when nothing is plugged in or connected.
@@ -49,7 +49,7 @@ Install the APK from the [latest release](https://github.com/ieatfood314/doppler
 
 ## Using it
 
-On the phone, tap a big numeral to play or pause it, and long-press it to open that playlist (find or pick a track, sort it by title, artist, album or how often and how recently you've played each song, change its order, reshuffle, or put another playlist on the slot). **All music** opens the whole library, with search. To make a playlist, long-press tracks to select them, then **Add to playlist**.
+On the phone, tap a big numeral to play or pause it, and long-press it to open that playlist (find or pick a track, sort it by title, artist, album or how often and how recently you've played each song, change its order, reshuffle, or put another playlist on the slot). **All music** opens the whole library, with search that finds artists and albums as well as songs, and **Artists** and **Albums** list them all. To make a playlist, long-press tracks to select them, then **Add to playlist**.
 
 On a computer:
 
@@ -57,7 +57,7 @@ On a computer:
 doppler 1 | doppler 2      play that slot, or pause it if it's already playing
 doppler toggle             pause or resume whatever was last playing
 doppler next | prev        skip
-doppler play NAME          play any playlist by name
+doppler play NAME          play any playlist, artist or album by name
 doppler status             what's playing, where
 doppler ui                 open the window
 ```
@@ -74,7 +74,7 @@ If you use EasyEffects, the player can load a preset whenever a playlist starts.
 "eq": {"f:1": "my-rock-preset", "f:2": "my-focus-preset"}
 ```
 
-The keys are playlist ids: `f:` followed by the folder's path in the library.
+The keys are playlist ids: `f:` followed by the folder's path in the library, or `a:` followed by an artist's name.
 
 ## Updating
 

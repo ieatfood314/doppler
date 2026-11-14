@@ -30,13 +30,20 @@ Window {
     property string openPlaylist: ""
     property var tracks: []
     property string query: ""
+    property string browse: "folder"  // what All music lists: folders and yours, artists, or albums
+    function listed() {
+        if (!st) return []
+        if (query.length < 2) return st.playlists.filter(function (p) { return browse === "folder" ? p.kind === "folder" || p.kind === "custom" : p.kind === browse })
+        var named = st.playlists.filter(function (p) { return (p.kind === "artist" || p.kind === "album") && (p.name + " " + p.by).toLowerCase().indexOf(query) >= 0 }).slice(0, 8)
+        return named.concat(allTracks.filter(function (t) { return (t.title + " " + t.artist + " " + t.album).toLowerCase().indexOf(query) >= 0 }).slice(0, 80))
+    }
     property var allTracks: []
     property string find: ""          // the search inside an open playlist
     property string sortBy: "default"
     readonly property var sorts: [["default", ""], ["title", "Title"], ["artist", "Artist"], ["album", "Album"],
                                   ["most", "Most played"], ["least", "Least played"], ["recent", "Recently played"]]
     function sortName(key) {
-        if (key === "default") return plPage.pv && plPage.pv.kind === "custom" ? "Order added" : "File order"
+        if (key === "default") return !plPage.pv ? "File order" : plPage.pv.kind === "custom" ? "Order added" : plPage.pv.kind === "folder" ? "File order" : "Album order"
         for (var i = 0; i < sorts.length; i++) if (sorts[i][0] === key) return sorts[i][1]
         return ""
     }
@@ -83,6 +90,7 @@ Window {
         if (!st) return 0
         return st.position + (st.playing ? Math.max(0, (now - fetchedAt) / 1000) : 0)
     }
+    function counted(n) { return n === 1 ? "1 track" : n + " tracks" }
     function clock(s) { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2) }
     function view(id) { if (!st) return null; for (var i = 0; i < st.playlists.length; i++) if (st.playlists[i].id === id) return st.playlists[i]; return null }
     function loadTracks(id) { call("GET", "/tracks?playlist=" + encodeURIComponent(id), null, function (d) { if (d) tracks = d }) }
@@ -363,11 +371,18 @@ Window {
                     onTextChanged: { query = text.toLowerCase(); if (query.length >= 2 && allTracks.length === 0) call("GET", "/tracks?playlist=f%3A", null, function (d) { if (d) allTracks = d }) } }
                 Words { anchors.fill: parent; anchors.margins: 11; visible: !search.text; color: faint; text: "Find a song, artist or album" }
             }
+            Row {
+                id: browseRow; anchors { top: searchBox.bottom; left: parent.left; topMargin: 10 }
+                spacing: 8; visible: query.length < 2; height: visible ? implicitHeight : 0
+                Repeater {
+                    model: [["folder", "Playlists"], ["artist", "Artists"], ["album", "Albums"]]
+                    Pill { required property var modelData; label: modelData[1]; strong: browse === modelData[0]; onClicked: browse = modelData[0] }
+                }
+            }
             ListView {
-                anchors { top: searchBox.bottom; left: parent.left; right: parent.right; bottom: newRow.top; topMargin: 10 }
+                anchors { top: browseRow.bottom; left: parent.left; right: parent.right; bottom: newRow.top; topMargin: 10 }
                 clip: true; spacing: 0
-                model: query.length >= 2 ? allTracks.filter(function (t) { return (t.title + " " + t.artist + " " + t.album).toLowerCase().indexOf(query) >= 0 }).slice(0, 80)
-                                         : (st ? st.playlists : [])
+                model: { query; browse; return listed() }
                 delegate: Item {
                     required property var modelData
                     property bool isTrack: modelData.title !== undefined
@@ -380,7 +395,8 @@ Window {
                             font.pixelSize: isTrack ? 15 : (depth === 0 ? 17 : 15); font.family: sans.name; font.weight: !isTrack && depth === 0 ? Font.Medium : Font.Normal }
                         Words { width: parent.width; color: faint; font.pixelSize: 12
                             text: isTrack ? [modelData.artist, modelData.album].filter(function (s) { return s }).join(", ")
-                                          : modelData.count + " tracks" + (modelData.kind === "custom" ? ", yours" : "") + (modelData.mode === "order" ? ", in order" : "") }
+                                          : (modelData.by ? modelData.by + ", " : "") + counted(modelData.count) + (modelData.kind === "custom" ? ", yours" : "")
+                                            + (modelData.mode === "order" ? ", in order" : "") }
                     }
                     Rectangle { id: badge; visible: !isTrack && modelData.slot !== ""; width: 26; height: 26; radius: 13; color: "transparent"
                         border.color: slotColor(modelData.slot || "1"); anchors { right: parent.right; verticalCenter: parent.verticalCenter; rightMargin: 6 }
@@ -408,7 +424,8 @@ Window {
                 font.family: sans.name; font.pixelSize: 32; font.weight: Font.Medium
                 onAccepted: { if (text.trim()) hub("PUT", "/api/playlists/" + openPlaylist, { name: text.trim() }); focus = false } }
             Words { id: plSub; anchors.top: plTitle.bottom; color: dust; font.pixelSize: 13
-                text: plPage.pv ? plPage.pv.count + " tracks" + (plPage.pv.kind === "custom" ? ", made by you; click the name to rename" : ", the folder " + plPage.pv.path) : "" }
+                text: !plPage.pv ? "" : counted(plPage.pv.count) + (plPage.pv.kind === "custom" ? ", made by you; click the name to rename"
+                    : plPage.pv.kind === "folder" ? ", the folder " + plPage.pv.path : plPage.pv.by ? ", by " + plPage.pv.by : "") }
             Flow {
                 id: plActions; anchors { top: plSub.bottom; left: parent.left; right: parent.right; topMargin: 12 }
             spacing: 8

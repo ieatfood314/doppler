@@ -53,7 +53,72 @@ object Core {
         return out
     }
 
-    fun playlistTracks(playlist: String, tracks: Collection<String>, custom: Map<String, CustomPlaylist>): List<String> {
+    // Artists ("a:<name>") and albums ("b:<album>", or "b:<album>\t<album artist>"); see core.py.
+
+    fun artistId(name: String) = "a:$name"
+    fun albumId(album: String, albumArtist: String = "") = "b:" + album + if (albumArtist.isNotEmpty()) "\t$albumArtist" else ""
+    fun isTagged(playlist: String) = playlist.startsWith("a:") || playlist.startsWith("b:")
+
+    private val space = Regex("\\s+")
+    private fun norm(text: String) = text.trim().replace(space, " ").lowercase()
+
+    /** The artists a track belongs to: its own, and its album's when that is someone else. */
+    fun trackArtists(t: Track): List<String> {
+        val out = ArrayList<String>()
+        for (name in listOf(t.artist.trim(), t.albumArtist.trim())) if (name.isNotEmpty() && out.none { norm(it) == norm(name) }) out.add(name)
+        return out
+    }
+
+    fun trackAlbum(t: Track): String? = t.album.trim().takeIf { it.isNotEmpty() }?.let { albumId(it, t.albumArtist.trim()) }
+
+    private fun inTagged(playlist: String, t: Track): Boolean {
+        if (playlist.startsWith("a:")) {
+            val wanted = norm(playlist.substring(2))
+            return trackArtists(t).any { norm(it) == wanted }
+        }
+        val album = playlist.substring(2).substringBefore("\t")
+        val by = playlist.substring(2).substringAfter("\t", "")
+        return t.album.isNotBlank() && norm(album) == norm(t.album) && norm(by) == norm(t.albumArtist)
+    }
+
+    /** A track's place on its album: album, disc, track number, then file name. */
+    fun albumOrder(tags: Map<String, Track>): Comparator<String> = compareBy<String, String>(natural) { tags[it]?.album ?: "" }
+        .thenBy { tags[it]?.disc ?: 0 }.thenBy { (tags[it]?.n ?: 0) == 0 }.thenBy { tags[it]?.n ?: 0 }.thenComparing(natural)
+
+    /** Every artist and every album, each named the way most of its files spell it (the first, on a tie). */
+    fun tagged(tags: Map<String, Track>): Pair<Map<String, List<String>>, Map<String, List<String>>> {
+        val groups = LinkedHashMap<String, MutableList<String>>()
+        val spellings = HashMap<String, LinkedHashMap<String, Int>>()
+        fun add(key: String, playlist: String, track: String) {
+            groups.getOrPut(key) { ArrayList() }.add(track)
+            val seen = spellings.getOrPut(key) { LinkedHashMap() }
+            seen[playlist] = (seen[playlist] ?: 0) + 1
+        }
+        for (id in tags.keys.sortedWith(albumOrder(tags))) {
+            val t = tags[id]!!
+            for (name in trackArtists(t)) add("a\u0000" + norm(name), artistId(name), id)
+            trackAlbum(t)?.let { add("b\u0000" + norm(t.album) + "\u0000" + norm(t.albumArtist), it, id) }
+        }
+        val artists = LinkedHashMap<String, List<String>>()
+        val albums = LinkedHashMap<String, List<String>>()
+        for ((key, list) in groups) {
+            val seen = spellings[key]!!
+            val best = seen.maxByOrNull { it.value }!!.key
+            (if (key.startsWith("a")) artists else albums)[best] = list
+        }
+        return artists to albums
+    }
+
+    /** Who an album is by: its album artist, or the one artist on all of it, or "Various artists". */
+    fun albumBy(playlist: String, tracks: List<String>, tags: Map<String, Track>): String {
+        if (playlist.contains("\t")) return playlist.substringAfter("\t")
+        val names = LinkedHashMap<String, String>()
+        for (id in tracks) tags[id]?.artist?.trim()?.takeIf { it.isNotEmpty() }?.let { names.putIfAbsent(norm(it), it) }
+        return when (names.size) { 0 -> ""; 1 -> names.values.first(); else -> "Various artists" }
+    }
+
+    fun playlistTracks(playlist: String, tracks: Collection<String>, custom: Map<String, CustomPlaylist>, tags: Map<String, Track> = emptyMap()): List<String> {
+        if (isTagged(playlist)) return tracks.filter { id -> tags[id]?.let { inTagged(playlist, it) } == true }.sortedWith(albumOrder(tags))
         if (isFolder(playlist)) {
             val prefix = playlist.substring(2)
             if (prefix.isEmpty()) return tracks.sortedWith(natural)
@@ -65,6 +130,7 @@ object Core {
 
     fun playlistName(playlist: String, custom: Map<String, CustomPlaylist>): String =
         if (isFolder(playlist)) playlist.substring(2).substringAfterLast("/").ifEmpty { "Everything" }
+        else if (isTagged(playlist)) playlist.substring(2).substringBefore("\t")
         else custom[playlist]?.name?.ifEmpty { null } ?: "Untitled"
 
     fun defaultSlots(folderIds: Set<String>): Map<String, String> {

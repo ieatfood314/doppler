@@ -20,6 +20,8 @@ except Exception:  # pragma: no cover - depends on the machine
 ART_SIZES = (160, 640)
 COVER_NAMES = ("cover", "folder", "front", "album", "artwork")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+# Part of the library's rev, so devices fetch the library again when the hub starts reading more tags.
+TAGS_VERSION = "2"
 
 
 def walk(root: str) -> dict[str, tuple[float, int]]:
@@ -74,7 +76,7 @@ def _has_picture(path: str) -> bool:
 
 def read_tags(path: str, track_id: str) -> dict:
     artist, title = core.split_title(track_id)
-    tags = {"title": title, "artist": artist, "album": "", "duration": 0.0, "n": 0, "art": False}
+    tags = {"title": title, "artist": artist, "albumartist": "", "album": "", "duration": 0.0, "n": 0, "disc": 0, "art": False}
     if mutagen is not None:
         try:
             audio = mutagen.File(path, easy=True)
@@ -84,8 +86,10 @@ def read_tags(path: str, track_id: str) -> dict:
             get = lambda key: _first(audio.get(key)) if audio.tags is not None else ""
             tags["title"] = get("title") or tags["title"]
             tags["artist"] = get("artist") or get("albumartist") or tags["artist"]
+            tags["albumartist"] = get("albumartist")
             tags["album"] = get("album")
             tags["n"] = _number(audio.get("tracknumber")) if audio.tags is not None else 0
+            tags["disc"] = _number(audio.get("discnumber")) if audio.tags is not None else 0
             tags["duration"] = round(float(getattr(audio.info, "length", 0) or 0), 2)
             tags["art"] = _has_picture(path)
             return tags
@@ -98,8 +102,10 @@ def read_tags(path: str, track_id: str) -> dict:
             found = {k.lower(): v for k, v in (data.get("format", {}).get("tags") or {}).items()}
             tags["title"] = found.get("title") or tags["title"]
             tags["artist"] = found.get("artist") or found.get("album_artist") or tags["artist"]
+            tags["albumartist"] = found.get("album_artist") or found.get("albumartist") or ""
             tags["album"] = found.get("album", "")
             tags["n"] = _number(found.get("track"))
+            tags["disc"] = _number(found.get("disc"))
             tags["duration"] = round(float(data.get("format", {}).get("duration") or 0), 2)
             tags["art"] = any(s.get("disposition", {}).get("attached_pic") for s in data.get("streams", []))
         except Exception:
@@ -181,7 +187,7 @@ class Library:
             pass
 
     def _set_rev(self):
-        digest = hashlib.sha1()
+        digest = hashlib.sha1(TAGS_VERSION.encode())
         for track_id in sorted(self.tracks):
             entry = self.tracks[track_id]
             digest.update(f"{track_id}\0{entry['m']}\0{entry['s']}\n".encode())
@@ -207,7 +213,7 @@ class Library:
             new = {}
             for track_id, (mtime, size) in found.items():
                 entry = old.get(track_id)
-                if entry and entry["m"] == mtime and entry["s"] == size:
+                if entry and entry["m"] == mtime and entry["s"] == size and "albumartist" in entry:
                     new[track_id] = entry
                 else:
                     tags = read_tags(os.path.join(self.root, track_id), track_id)
@@ -233,8 +239,8 @@ class Library:
     def public(self) -> dict:
         with self.lock:
             tracks = [
-                {"id": track_id, "title": e["title"], "artist": e["artist"], "album": e["album"],
-                 "duration": e["duration"], "n": e["n"], "art": e["art"]}
+                {"id": track_id, "title": e["title"], "artist": e["artist"], "albumartist": e.get("albumartist", ""),
+                 "album": e["album"], "duration": e["duration"], "n": e["n"], "disc": e.get("disc", 0), "art": e["art"]}
                 for track_id, e in sorted(self.tracks.items(), key=lambda kv: core.natural_key(kv[0]))
             ]
             return {"rev": self.rev, "tracks": tracks}

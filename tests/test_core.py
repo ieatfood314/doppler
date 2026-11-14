@@ -30,6 +30,33 @@ class Folders(unittest.TestCase):
         self.assertEqual(core.default_slots(set(core.folders(TRACKS))), {"1": "f:1", "2": "f:2"})
         self.assertEqual(core.default_slots({"f:", "f:Rock", "f:Jazz", "f:Jazz/Live"}), {"1": "f:Jazz", "2": "f:Rock"})
 
+    def test_artists_and_albums_are_playlists_from_tags(self):
+        tags = {
+            "1/a.flac": {"artist": "Queen", "albumartist": "Queen", "album": "Greatest Hits", "n": 2},
+            "1/b.flac": {"artist": "Aerosmith", "albumartist": "Aerosmith", "album": "Greatest Hits", "n": 1},
+            "1/c.flac": {"artist": "queen ", "albumartist": "Queen", "album": "greatest hits", "n": 1},
+            "1/d.flac": {"artist": "Queen", "albumartist": "Queen", "album": "Greatest Hits", "n": 3},
+            "2/x.mp3": {"artist": "Claude Werner", "albumartist": "", "album": "SuperTuxKart", "n": 0},
+            "2/y.mp3": {"artist": "Geek Penguin", "albumartist": "", "album": "SuperTuxKart", "n": 0},
+            "2/z.mp3": {"artist": "Daft Punk feat. Pharrell", "albumartist": "Daft Punk", "album": "", "n": 0},
+        }
+        ids = list(tags)
+        artists, albums = core.tagged(tags)
+        self.assertEqual(set(albums), {"b:Greatest Hits\tQueen", "b:Greatest Hits\tAerosmith", "b:SuperTuxKart"})
+        self.assertEqual(albums["b:Greatest Hits\tQueen"], ["1/c.flac", "1/a.flac", "1/d.flac"])
+        self.assertEqual(core.playlist_tracks("b:greatest HITS\tqueen", ids, {}, tags), ["1/c.flac", "1/a.flac", "1/d.flac"])
+        self.assertEqual(core.playlist_tracks("b:SuperTuxKart", ids, {}, tags), ["2/x.mp3", "2/y.mp3"])
+        self.assertEqual(core.playlist_tracks("a:QUEEN", ids, {}, tags), ["1/c.flac", "1/a.flac", "1/d.flac"])
+        self.assertEqual(core.playlist_tracks("a:Daft Punk", ids, {}, tags), ["2/z.mp3"])
+        self.assertIn("a:Queen", artists)
+        self.assertNotIn("a:queen", artists)
+        self.assertEqual(core.playlist_name("b:Greatest Hits\tQueen", {}), "Greatest Hits")
+        self.assertEqual(core.playlist_name("a:Queen", {}), "Queen")
+        self.assertEqual(core.album_by("b:Greatest Hits\tQueen", [], tags), "Queen")
+        self.assertEqual(core.album_by("b:SuperTuxKart", albums["b:SuperTuxKart"], tags), "Various artists")
+        self.assertEqual(core.playlist_tracks("a:Nobody", ids, {}, tags), [])
+        self.assertEqual(core.playlist_tracks("a:Queen", ids, {}), [])
+
     def test_names_from_files(self):
         self.assertEqual(core.split_title("1/Van Halen - Jump (2015 Remaster).flac"), ("Van Halen", "Jump (2015 Remaster)"))
         self.assertEqual(core.split_title("x/07 - Californication.flac"), ("", "Californication"))

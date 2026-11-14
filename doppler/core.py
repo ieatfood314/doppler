@@ -49,8 +49,105 @@ def folders(track_ids) -> dict[str, list[str]]:
     return out
 
 
-def playlist_tracks(playlist: str, track_ids, custom: dict) -> list[str]:
-    """The tracks of a folder or of a hand-made playlist, leaving out files that are gone."""
+# An artist is "a:<name>", every track by them or on an album of theirs. An album is
+# "b:<album>", or "b:<album>\t<album artist>" when the files name one, so that two bands'
+# "Greatest Hits" stay apart while a soundtrack whose tracks name no album artist stays whole.
+# Names match whatever their case and spacing.
+
+def artist_id(name: str) -> str:
+    return "a:" + name
+
+
+def album_id(album: str, album_artist: str = "") -> str:
+    return "b:" + album + ("\t" + album_artist if album_artist else "")
+
+
+def is_tagged(playlist: str) -> bool:
+    """An artist or an album: a playlist made from tags, which needs them to know its tracks."""
+    return playlist.startswith(("a:", "b:"))
+
+
+def _norm(text) -> str:
+    return " ".join(str(text or "").split()).casefold()
+
+
+def track_artists(meta: dict) -> list[str]:
+    """The artists a track belongs to: its own, and its album's when that is someone else."""
+    out = []
+    for name in (meta.get("artist"), meta.get("albumartist")):
+        name = str(name or "").strip()
+        if name and _norm(name) not in map(_norm, out):
+            out.append(name)
+    return out
+
+
+def track_album(meta: dict) -> str | None:
+    album = str(meta.get("album") or "").strip()
+    return album_id(album, str(meta.get("albumartist") or "").strip()) if album else None
+
+
+def _in_tagged(playlist: str, meta: dict) -> bool:
+    if playlist.startswith("a:"):
+        wanted = _norm(playlist[2:])
+        return any(_norm(name) == wanted for name in track_artists(meta))
+    album, _, by = playlist[2:].partition("\t")
+    return bool(meta.get("album")) and _norm(album) == _norm(meta.get("album")) and _norm(by) == _norm(meta.get("albumartist"))
+
+
+def album_order(tags: dict):
+    """Sort key for a track by its place on its album: album, disc, track number, then file name."""
+    def key(track):
+        meta = tags.get(track) or {}
+        n = int(meta.get("n") or 0)
+        return (natural_key(str(meta.get("album") or "")), int(meta.get("disc") or 0), n == 0, n, natural_key(track))
+    return key
+
+
+def tagged(tags: dict) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Every artist and every album in the library, as ({id: tracks}, {id: tracks}). Each is named
+    the way most of its files spell it (the first of them, on a tie)."""
+    groups: dict[tuple, list[str]] = {}
+    spellings: dict[tuple, dict[str, int]] = {}
+
+    def add(key, playlist, track):
+        groups.setdefault(key, []).append(track)
+        seen = spellings.setdefault(key, {})
+        seen[playlist] = seen.get(playlist, 0) + 1
+
+    for track in sorted(tags, key=album_order(tags)):
+        meta = tags[track] or {}
+        for name in track_artists(meta):
+            add(("a", _norm(name)), artist_id(name), track)
+        album = track_album(meta)
+        if album:
+            add(("b", _norm(meta.get("album")), _norm(meta.get("albumartist"))), album, track)
+    artists: dict[str, list[str]] = {}
+    albums: dict[str, list[str]] = {}
+    for key, tracks in groups.items():
+        seen = spellings[key]
+        playlist = max(seen, key=seen.get)
+        (artists if key[0] == "a" else albums)[playlist] = tracks
+    return artists, albums
+
+
+def album_by(playlist: str, tracks, tags: dict) -> str:
+    """Who an album is by: its album artist, or the one artist on all of it, or "Various artists"."""
+    if "\t" in playlist:
+        return playlist.split("\t", 1)[1]
+    names = {}
+    for track in tracks:
+        name = str((tags.get(track) or {}).get("artist") or "").strip()
+        if name:
+            names.setdefault(_norm(name), name)
+    return next(iter(names.values())) if len(names) == 1 else ("Various artists" if names else "")
+
+
+def playlist_tracks(playlist: str, track_ids, custom: dict, tags: dict | None = None) -> list[str]:
+    """The tracks of a folder, an artist, an album or a hand-made playlist, leaving out files
+    that are gone. Artists and albums need the tags: {track: {"artist", "albumartist", ...}}."""
+    if is_tagged(playlist):
+        tags = tags or {}
+        return sorted((t for t in track_ids if t in tags and _in_tagged(playlist, tags[t] or {})), key=album_order(tags))
     if is_folder(playlist):
         prefix = playlist[2:]
         if not prefix:
@@ -65,6 +162,8 @@ def playlist_tracks(playlist: str, track_ids, custom: dict) -> list[str]:
 def playlist_name(playlist: str, custom: dict) -> str:
     if is_folder(playlist):
         return playlist[2:].rsplit("/", 1)[-1] or "Everything"
+    if is_tagged(playlist):
+        return playlist[2:].split("\t", 1)[0]
     return (custom.get(playlist) or {}).get("name") or "Untitled"
 
 

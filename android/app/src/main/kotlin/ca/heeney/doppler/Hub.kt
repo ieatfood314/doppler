@@ -7,13 +7,16 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
-data class Track(val id: String, val title: String, val artist: String, val album: String, val duration: Double, val art: Boolean) {
+data class Track(
+    val id: String, val title: String, val artist: String, val album: String, val duration: Double, val art: Boolean,
+    val albumArtist: String = "", val n: Int = 0, val disc: Int = 0,
+) {
     fun toJson(): JSONObject = JSONObject().put("id", id).put("title", title).put("artist", artist).put("album", album)
-        .put("duration", duration).put("art", art)
+        .put("duration", duration).put("art", art).put("albumartist", albumArtist).put("n", n).put("disc", disc)
 
     companion object {
         fun from(o: JSONObject) = Track(o.getString("id"), o.optString("title"), o.optString("artist"), o.optString("album"),
-            o.optDouble("duration", 0.0), o.optBoolean("art"))
+            o.optDouble("duration", 0.0), o.optBoolean("art"), o.optString("albumartist"), o.optInt("n"), o.optInt("disc"))
 
         fun guess(id: String): Track {
             val (artist, title) = Core.splitTitle(id)

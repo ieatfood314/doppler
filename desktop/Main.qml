@@ -33,7 +33,9 @@ Window {
     property string browse: "folder"  // what All music lists: folders and yours, artists, or albums
     function listed() {
         if (!st) return []
-        if (query.length < 2) return st.playlists.filter(function (p) { return browse === "folder" ? p.kind === "folder" || p.kind === "custom" : p.kind === browse })
+        // On the Artists or Albums tab the search goes through that list alone.
+        if (browse !== "folder") return st.playlists.filter(function (p) { return p.kind === browse && (!query || (p.name + " " + p.by).toLowerCase().indexOf(query) >= 0) })
+        if (query.length < 2) return st.playlists.filter(function (p) { return p.kind === "folder" || p.kind === "custom" })
         var named = st.playlists.filter(function (p) { return (p.kind === "artist" || p.kind === "album") && (p.name + " " + p.by).toLowerCase().indexOf(query) >= 0 }).slice(0, 8)
         return named.concat(allTracks.filter(function (t) { return (t.title + " " + t.artist + " " + t.album).toLowerCase().indexOf(query) >= 0 }).slice(0, 80))
     }
@@ -131,7 +133,7 @@ Window {
     Shortcut { sequence: "Space"; onActivated: act("/toggle") }
     Shortcut { sequence: "Right"; onActivated: act("/next") }
     Shortcut { sequence: "Left"; onActivated: act("/prev") }
-    Shortcut { sequence: "Escape"; onActivated: { if (openPlaylist && plFind.text) plFind.text = ""; else if (openPlaylist) openPlaylist = ""; else if (libraryOpen) libraryOpen = false; else win.close() } }
+    Shortcut { sequence: "Escape"; onActivated: { if (openPlaylist && plFind.text) plFind.text = ""; else if (openPlaylist) openPlaylist = ""; else if (libraryOpen && search.text) search.text = ""; else if (libraryOpen) libraryOpen = false; else win.close() } }
     Shortcut { sequence: "Ctrl+F"; onActivated: { if (openPlaylist) plFind.forceActiveFocus(); else { libraryOpen = true; search.forceActiveFocus() } } }
 
     // ------------------------------------------------------------ the sky
@@ -369,11 +371,12 @@ Window {
                 height: 40; radius: 12; color: panel; border.color: search.activeFocus ? faint : hairline
                 TextInput { id: search; anchors.fill: parent; anchors.margins: 11; color: starlight; font.family: sans.name; font.pixelSize: 15; clip: true
                     onTextChanged: { query = text.toLowerCase(); if (query.length >= 2 && allTracks.length === 0) call("GET", "/tracks?playlist=f%3A", null, function (d) { if (d) allTracks = d }) } }
-                Words { anchors.fill: parent; anchors.margins: 11; visible: !search.text; color: faint; text: "Find a song, artist or album" }
+                Words { anchors.fill: parent; anchors.margins: 11; visible: !search.text; color: faint
+                    text: browse === "artist" ? "Find an artist" : browse === "album" ? "Find an album" : "Find a song, artist or album" }
             }
             Row {
                 id: browseRow; anchors { top: searchBox.bottom; left: parent.left; topMargin: 10 }
-                spacing: 8; visible: query.length < 2; height: visible ? implicitHeight : 0
+                spacing: 8
                 Repeater {
                     model: [["folder", "Playlists"], ["artist", "Artists"], ["album", "Albums"]]
                     Pill { required property var modelData; label: modelData[1]; strong: browse === modelData[0]; onClicked: browse = modelData[0] }

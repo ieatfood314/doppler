@@ -49,7 +49,7 @@ Install the APK from the [latest release](https://github.com/ieatfood314/doppler
 
 ## Using it
 
-On the phone, tap a big numeral to play or pause it, and long-press it to open that playlist (find or pick a track, sort it by title, artist, album or how often and how recently you've played each song, change its order, reshuffle, or put another playlist on the slot). **All music** opens the whole library, with search that finds artists and albums as well as songs, and **Artists** and **Albums** list them all. To make a playlist, long-press tracks to select them, then **Add to playlist**.
+On the phone, tap a big numeral to play or pause it, and long-press it to open that playlist (find or pick a track, sort it by title, artist, album or how often and how recently you've played each song, change its order, reshuffle, or put another playlist on the slot). **All music** opens the whole library, with search that finds artists and albums as well as songs, and **Artists** and **Albums** list them all, each with its own search. In the window, the search on the Artists or Albums tab looks through that list alone. To make a playlist, long-press tracks to select them, then **Add to playlist**.
 
 On a computer:
 

@@ -436,18 +436,36 @@ private fun Library(engine: Engine, state: UiState, open: (Screen) -> Unit, back
     }
 }
 
-/** Every artist, or every album, in the library. */
+/** Every artist, or every album, in the library, with a search through them. */
 @Composable
 private fun BrowsePage(state: UiState, kind: String, open: (Screen) -> Unit, back: () -> Unit) {
-    val shown = remember(state.playlists, kind) { state.playlists.filter { it.kind == kind } }
-    LazyColumn(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 22.dp)) {
-        item { Header(if (kind == "artist") "Artists" else "Albums", back) }
-        item {
-            Text(if (shown.isEmpty()) "None yet: they come from the songs' tags" else "${shown.size}", color = Palette.Dust, size = 14,
-                modifier = Modifier.padding(bottom = 10.dp))
+    val all = remember(state.playlists, kind) { state.playlists.filter { it.kind == kind } }
+    var find by rememberSaveable(kind) { mutableStateOf("") }
+    var searching by rememberSaveable(kind) { mutableStateOf(find.isNotEmpty()) }
+    val q = find.trim().lowercase()
+    val shown = remember(all, q) { if (q.isEmpty()) all else all.filter { it.name.lowercase().contains(q) || it.by.lowercase().contains(q) } }
+    val noun = if (kind == "artist") "artist" else "album"
+    BackHandler(searching) { searching = false; find = "" }
+    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().padding(horizontal = 22.dp)) {
+        // Outside the list, so the search field stays put (and keeps focus) while the results scroll.
+        TopBar(back, searching, find, { find = it }, "Find an $noun",
+            openSearch = if (all.size > 1) ({ searching = true }) else null,
+            closeSearch = { searching = false; find = "" })
+        LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+            item {
+                Title(if (kind == "artist") "Artists" else "Albums")
+                Text(when {
+                    all.isEmpty() -> "None yet: they come from the songs' tags"
+                    q.isEmpty() -> "${all.size}"
+                    else -> "${shown.size} of ${all.size}"
+                }, color = Palette.Dust, size = 14, modifier = Modifier.padding(bottom = 10.dp))
+            }
+            if (all.isNotEmpty() && shown.isEmpty()) item {
+                Text("No $noun matches that", color = Palette.Dust, size = 15, modifier = Modifier.padding(vertical = 14.dp))
+            }
+            items(shown, key = { it.id }) { p -> PlaylistRow(p, state) { open(Screen.Playlist(p.id)) } }
+            item { Spacer(Modifier.height(40.dp)) }
         }
-        items(shown, key = { it.id }) { p -> PlaylistRow(p, state) { open(Screen.Playlist(p.id)) } }
-        item { Spacer(Modifier.height(40.dp)) }
     }
 }
 
@@ -769,7 +787,8 @@ private fun Title(title: String) {
 /** Back on the left, quiet icons on the right. The magnifier opens into the search field in place. */
 @Composable
 private fun TopBar(back: () -> Unit, searching: Boolean, find: String, change: (String) -> Unit, hint: String,
-                   openSearch: (() -> Unit)?, closeSearch: () -> Unit, sortOn: Boolean, openSort: (() -> Unit)?, openMore: () -> Unit) {
+                   openSearch: (() -> Unit)?, closeSearch: () -> Unit, sortOn: Boolean = false, openSort: (() -> Unit)? = null,
+                   openMore: (() -> Unit)? = null) {
     Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
         BackButton(back)
         Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
@@ -780,7 +799,7 @@ private fun TopBar(back: () -> Unit, searching: Boolean, find: String, change: (
                 else Row(verticalAlignment = Alignment.CenterVertically) {
                     openSearch?.let { IconButton("Find", it) { c -> drawFind(c) } }
                     openSort?.let { IconButton(if (sortOn) "Sort, changed" else "Sort", it, dot = sortOn) { c -> drawSort(c) } }
-                    IconButton("More", openMore) { c -> drawMore(c) }
+                    openMore?.let { IconButton("More", it) { c -> drawMore(c) } }
                 }
             }
         }

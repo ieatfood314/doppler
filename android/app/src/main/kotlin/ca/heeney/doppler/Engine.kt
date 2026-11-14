@@ -13,6 +13,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -23,9 +24,11 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -87,7 +90,9 @@ class Engine private constructor(private val context: Context) {
 
         const val HEARTBEAT_MS = 15_000L
         const val SPEAKER_GRACE_MS = 10 * 60_000L
+        const val LOCAL_WAIT_MS = 3_000L
         const val CHANNEL = "speaker"
+        const val TAG = "doppler"   // Log.i: Nothing OS drops Log.d from apps
     }
 
     val store = Store(context)
@@ -102,6 +107,8 @@ class Engine private constructor(private val context: Context) {
     private val sessions: MutableMap<String, Session> = store.loadSessions()
     private val outbox: MutableMap<String, Pair<Boolean, Long>> = store.loadOutbox()
     private var local: Map<String, Uri> = emptyMap()
+    private var scan: Deferred<Unit>? = null
+    private var scanned = false     // the media index has been read at least once in this process
 
     private var current: String? = store.current
     private var order: List<String> = emptyList()
@@ -161,6 +168,7 @@ class Engine private constructor(private val context: Context) {
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 if (playWhenReady != playing && current != null) {
+                    Log.i(TAG, "playWhenReady=$playWhenReady reason=$reason")
                     if (!playWhenReady) checkPlay()
                     playing = playWhenReady
                     if (!playing) speakerAllowedUntil = maxOf(speakerAllowedUntil, SystemClock.elapsedRealtime() + SPEAKER_GRACE_MS)
@@ -178,6 +186,7 @@ class Engine private constructor(private val context: Context) {
 
             override fun onPlayerError(error: PlaybackException) {
                 errors++
+                Log.i(TAG, "error ${error.errorCodeName} on ${player.currentMediaItem?.localConfiguration?.uri?.scheme}: ${error.message}")
                 val exo = player
                 if (errors < 4 && exo.mediaItemCount > 1) {
                     message = "Skipped a track that wouldn't play"
@@ -207,7 +216,7 @@ class Engine private constructor(private val context: Context) {
             override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) = routeChanged()
             override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) = routeChanged()
         }, main)
-        scope.launch { refreshLocal() }
+        rescanLocal()
         scope.launch { sender() }
         publish()
         refresh()
@@ -232,11 +241,45 @@ class Engine private constructor(private val context: Context) {
         wake.trySend(Unit)
     }
 
-    suspend fun refreshLocal() {
+    suspend fun refreshLocal() = rescanLocal().await()
+
+    /** Look again for the phone's own copies, and point the queue at whatever that finds. */
+    private fun rescanLocal(): Deferred<Unit> = scope.async {
         val ids = library.keys.toList()
-        local = withContext(Dispatchers.IO) { LocalFiles.find(context, ids) }
+        val found = withContext(Dispatchers.IO) { LocalFiles.find(context, ids) }
+        Log.i(TAG, "local copies: ${found?.size ?: "index unreadable"} of ${ids.size}")
+        if (found != null) {
+            local = found
+            scanned = true
+            useLocal()
+        }
         publish()
+    }.also { scan = it }
+
+    /** Before a queue is built: a cold start (a widget tap after the system freed the app) gets to play
+     * before the first look at the phone's files is done, and without this the whole queue streamed. */
+    private suspend fun awaitLocal() {
+        if (scanned) return
+        val pending = scan?.takeIf { it.isActive } ?: rescanLocal()
+        withTimeoutOrNull(LOCAL_WAIT_MS) { pending.await() }
     }
+
+    /** Swap queued tracks to the phone's copy once it's known (or back to the hub if the copy went away).
+     * The track that's on is left alone, so nothing jumps. */
+    private fun useLocal() {
+        val on = player.currentMediaItemIndex
+        fun stale(i: Int) = i != on && player.getMediaItemAt(i).let { it.localConfiguration?.uri != source(it.mediaId) }
+        var i = 0
+        while (i < player.mediaItemCount) {
+            if (!stale(i)) { i++; continue }
+            var end = i
+            while (end < player.mediaItemCount && stale(end)) end++
+            player.replaceMediaItems(i, end, (i until end).map { player.getMediaItemAt(it).let { m -> m.buildUpon().setUri(source(m.mediaId)).build() } })
+            i = end
+        }
+    }
+
+    private fun source(id: String): Uri = local[id] ?: Uri.parse(hub.fileUrl(id))
 
     /** Fetch the hub's state and library now. */
     fun refresh() {
@@ -513,6 +556,7 @@ class Engine private constructor(private val context: Context) {
             return
         }
         checkPlay()
+        awaitLocal()
         val mode = modes()[playlist] ?: "shuffle"
         var base: Session? = null
         if (!fresh) {
@@ -566,7 +610,7 @@ class Engine private constructor(private val context: Context) {
         val meta = MediaMetadata.Builder().setTitle(t.title).setArtist(t.artist.ifEmpty { null }).setAlbumTitle(t.album.ifEmpty { null })
             .setIsPlayable(true).setIsBrowsable(false)
         artUrl(t)?.let { meta.setArtworkUri(Uri.parse(it)) }
-        return MediaItem.Builder().setMediaId(id).setUri(local[id] ?: Uri.parse(hub.fileUrl(id))).setMediaMetadata(meta.build()).build()
+        return MediaItem.Builder().setMediaId(id).setUri(source(id)).setMediaMetadata(meta.build()).build()
     }
 
     private fun wrap() {
@@ -605,6 +649,7 @@ class Engine private constructor(private val context: Context) {
     }
 
     private fun yieldTo(device: String) {
+        Log.i(TAG, "yielding to $device")
         playing = false
         player.pause()
         current?.let { c -> sessions[c]?.let { sessions[c] = it.copy(unsent = false, playing = false) }; outbox.remove(c) }

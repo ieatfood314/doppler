@@ -15,7 +15,9 @@ object LocalFiles {
 
     fun allowed(context: Context) = context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
-    fun find(context: Context, ids: Collection<String>): Map<String, Uri> {
+    /** Null when the media index couldn't be read (it can fail while the system is short of memory),
+     * so a failed look isn't taken for "nothing here". */
+    fun find(context: Context, ids: Collection<String>): Map<String, Uri>? {
         if (!allowed(context) || ids.isEmpty()) return emptyMap()
         // index every track id by its file name, then check the folders above it
         val byName = HashMap<String, MutableList<String>>()
@@ -23,8 +25,9 @@ object LocalFiles {
         val out = HashMap<String, Uri>()
         val columns = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.RELATIVE_PATH, MediaStore.Audio.Media.DISPLAY_NAME)
         val collection = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
-        runCatching {
-            context.contentResolver.query(collection, columns, null, null, null)?.use { c ->
+        return runCatching {
+            val cursor = context.contentResolver.query(collection, columns, null, null, null) ?: return null
+            cursor.use { c ->
                 while (c.moveToNext()) {
                     val name = c.getString(2) ?: continue
                     val candidates = byName[name] ?: continue
@@ -33,7 +36,7 @@ object LocalFiles {
                     if (id !in out) out[id] = ContentUris.withAppendedId(collection, c.getLong(0))
                 }
             }
-        }
-        return out
+            out
+        }.getOrNull()
     }
 }

@@ -231,12 +231,17 @@ object Widgets {
     }.getOrNull()
 
     private fun fetch(url: String): ByteArray? = runCatching {
+        if (!Net.check()) return null   // covers from the hub are Wi-Fi only
         val conn = URL(url).openConnection() as HttpURLConnection
+        Net.holdWhileOnWifi(conn)   // cut if the phone leaves the Wi-Fi halfway
         try {
             conn.connectTimeout = 8000
             conn.readTimeout = 8000
             if (conn.responseCode == 200) conn.inputStream.use { it.readBytes() } else null
-        } finally { conn.disconnect() }
+        } finally {
+            Net.release(conn)
+            conn.disconnect()
+        }
     }.getOrNull()
 
     /** The cover with corners of [fraction] of its side, made once per size. */

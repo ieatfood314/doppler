@@ -89,34 +89,64 @@ data class HubState(
     }
 }
 
-/** Plain HTTP to the hub. Every call blocks, so run them off the main thread. */
+/** Plain HTTP to the hub. Every call blocks, so run them off the main thread.
+ *
+ * Nothing goes over mobile data unless the call says [progress] (a session report, or the session
+ * read before a press of play); those are counted against the month's allowance in [Net]. */
 class Hub(val base: String) {
     class Reply(val code: Int, val body: String, val etag: String?)
 
-    fun request(method: String, path: String, body: JSONObject? = null, timeoutMs: Int = 6000, etag: String? = null): Reply {
+    fun request(method: String, path: String, body: JSONObject? = null, timeoutMs: Int = 6000, etag: String? = null,
+                progress: Boolean = false): Reply {
         if (base.isBlank()) throw IOException("no hub set")
+        val onWifi = Net.check()
+        if (!onWifi) {
+            if (!progress) throw NotOnWifi()
+            if (!Net.hasBudget()) throw NotOnWifi("this month's mobile data is used up")
+        }
+        val out = body?.toString()?.toByteArray()
+        var received = 0L
         val conn = URL(base.trimEnd('/') + path).openConnection() as HttpURLConnection
+        if (onWifi) Net.holdWhileOnWifi(conn)
+        var keep = false
         try {
+            if (onWifi && !progress && !Net.free) throw NotOnWifi()   // left the Wi-Fi in the last moment
             conn.requestMethod = method
             conn.connectTimeout = minOf(timeoutMs, 8000)
             conn.readTimeout = timeoutMs
             if (etag != null) conn.setRequestProperty("If-None-Match", etag)
-            if (body != null) {
+            if (out != null) {
                 conn.doOutput = true
                 conn.setRequestProperty("Content-Type", "application/json")
-                conn.outputStream.use { it.write(body.toString().toByteArray()) }
+                conn.setFixedLengthStreamingMode(out.size)
+                conn.outputStream.use { it.write(out) }
             }
             val code = conn.responseCode
             val stream = if (code >= 400) conn.errorStream else if (code == 304) null else conn.inputStream
-            val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
-            return Reply(code, text, conn.getHeaderField("ETag"))
+            val bytes = java.io.ByteArrayOutputStream()
+            stream?.use { s ->
+                val chunk = ByteArray(8192)
+                while (true) {
+                    // a download that started on Wi-Fi stops the moment the phone leaves it
+                    if (!progress && !Net.free) throw NotOnWifi()
+                    val n = s.read(chunk)
+                    if (n < 0) break
+                    bytes.write(chunk, 0, n)
+                }
+            }
+            received = bytes.size().toLong()
+            // Over mobile data the connection is kept for the next report, which saves a TLS handshake each time.
+            keep = !onWifi
+            return Reply(code, bytes.toString("UTF-8"), conn.getHeaderField("ETag"))
         } finally {
-            conn.disconnect()
+            Net.release(conn)
+            if (!keep) conn.disconnect()
+            if (!onWifi) Net.charged((out?.size ?: 0) + received + path.length + 1500L)
         }
     }
 
-    fun json(method: String, path: String, body: JSONObject? = null, timeoutMs: Int = 6000): JSONObject {
-        val reply = request(method, path, body, timeoutMs)
+    fun json(method: String, path: String, body: JSONObject? = null, timeoutMs: Int = 6000, progress: Boolean = false): JSONObject {
+        val reply = request(method, path, body, timeoutMs, progress = progress)
         if (reply.code >= 500) throw IOException("hub answered ${reply.code}")
         return try { JSONObject(reply.body) } catch (e: Exception) { throw IOException("hub sent something odd") }
     }

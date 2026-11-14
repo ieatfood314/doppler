@@ -21,8 +21,11 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -31,6 +34,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
@@ -74,6 +78,8 @@ data class UiState(
     val onSpeaker: Boolean = false,
     val localCount: Int = 0,
     val libraryCount: Int = 0,
+    val onWifi: Boolean = true,
+    val mobileUsed: Long = 0,
     val customs: List<CustomPlaylist> = emptyList(),
     val playsRev: Int = 0,
 )
@@ -92,6 +98,7 @@ class Engine private constructor(private val context: Context) {
         fun peek(): Engine? = instance
 
         const val HEARTBEAT_MS = 15_000L
+        const val HEARTBEAT_MOBILE_MS = 120_000L   // over mobile data, a word every two minutes is plenty
         const val SPEAKER_GRACE_MS = 10 * 60_000L
         const val LOCAL_WAIT_MS = 3_000L
         const val CHANNEL = "speaker"
@@ -124,6 +131,7 @@ class Engine private constructor(private val context: Context) {
     private var askSpeaker: PendingPlay? = null
     private var speakerAllowedUntil = 0L
     private var uiVisible = 0
+    private var lastReport = 0L
 
     private val plays = store.loadPlays("plays.json")          // this phone's own counts
     private val playsOut = store.loadPlays("plays-out.json")   // ...that the hub hasn't had yet
@@ -149,7 +157,11 @@ class Engine private constructor(private val context: Context) {
         // Float output keeps 24-bit FLAC at full depth all the way to the mixer; nothing here
         // resamples, normalises or scales: volume is left to the system.
         val renderers = DefaultRenderersFactory(context).setEnableAudioFloatOutput(true)
+        // The phone's own copies (content://) go straight through; anything from the hub waits for Wi-Fi.
+        val http = WifiOnlySource.Factory(DefaultHttpDataSource.Factory(), wait = true)
+        val sources = DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http)).setLoadErrorHandlingPolicy(WifiOnlyErrors())
         val exo = ExoPlayer.Builder(context, renderers)
+            .setMediaSourceFactory(sources)
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
@@ -163,6 +175,11 @@ class Engine private constructor(private val context: Context) {
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) checkPlay(ended = true)
                 listen++
                 listenTrack = item?.mediaId
+                Net.playingUri = item?.localConfiguration?.uri?.toString()
+                if (item != null && !Net.free && !onPhone(item)) {
+                    main.post { skipToPhoneCopy() }
+                    return
+                }
                 if (item != null && current != null) {
                     errors = 0
                     report()
@@ -188,6 +205,11 @@ class Engine private constructor(private val context: Context) {
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                if (WifiOnlyErrors.notOnWifi(error)) {
+                    Log.i(TAG, "not on Wi-Fi: moving to the phone's own copies")
+                    main.post { skipToPhoneCopy() }
+                    return
+                }
                 errors++
                 Log.i(TAG, "error ${error.errorCodeName} on ${player.currentMediaItem?.localConfiguration?.uri?.scheme}: ${error.message}")
                 val exo = player
@@ -210,6 +232,8 @@ class Engine private constructor(private val context: Context) {
     }
 
     private fun start() {
+        Net.init(context)
+        Net.onChange { main.post { networkChanged() } }
         val (etag, lib) = store.loadLibrary()
         libraryEtag = etag
         library = lib
@@ -242,6 +266,43 @@ class Engine private constructor(private val context: Context) {
         watcher = null
         refresh()
         wake.trySend(Unit)
+    }
+
+    private fun networkChanged() {
+        Log.i(TAG, if (Net.free) "on Wi-Fi" else "off Wi-Fi: music from the phone only, progress reports only")
+        if (Net.free) {
+            wake.trySend(Unit)   // whatever waited for Wi-Fi (play counts, a full order) goes now
+            refresh()
+        }
+        // Off Wi-Fi a streamed track plays what it has buffered, then the player's error moves on.
+        publish()
+    }
+
+    private fun onPhone(item: MediaItem) = item.localConfiguration?.uri?.scheme.let { it != "http" && it != "https" }
+
+    /** Off Wi-Fi: carry on from the next track that's on the phone, passing over the ones that aren't. */
+    private fun skipToPhoneCopy() {
+        val exo = player
+        if (exo.mediaItemCount == 0 || current == null) return
+        var i = exo.currentMediaItemIndex
+        while (i < exo.mediaItemCount && !onPhone(exo.getMediaItemAt(i))) i++
+        if (i >= exo.mediaItemCount) {
+            message = "Off Wi-Fi, and the rest isn't on the phone"
+            if (playing) {
+                playing = false
+                exo.pause()
+                report()
+            }
+            publish()
+            return
+        }
+        if (i != exo.currentMediaItemIndex) {
+            message = "Off Wi-Fi: skipped songs not on the phone"
+            exo.seekTo(i, 0)
+        }
+        if (exo.playbackState == Player.STATE_IDLE) exo.prepare()
+        if (playing) exo.play()
+        publish()
     }
 
     suspend fun refreshLocal() = rescanLocal().await()
@@ -286,6 +347,12 @@ class Engine private constructor(private val context: Context) {
 
     /** Fetch the hub's state and library now. */
     fun refresh() {
+        if (!Net.free) {
+            // the hub's live state and the library wait for Wi-Fi; only progress goes out
+            loops()
+            publish()
+            return
+        }
         scope.launch {
             val got = withContext(Dispatchers.IO) { runCatching { fetchState(null) }.getOrNull() }
             if (got != null) onHub(got) else offline()
@@ -361,6 +428,11 @@ class Engine private constructor(private val context: Context) {
                 var wait = 2000L
                 var rev: Long? = null
                 while (isActive && (playing || uiVisible > 0)) {
+                    if (!Net.free) {
+                        Net.state.first { it }
+                        rev = null
+                        continue
+                    }
                     val got = withContext(Dispatchers.IO) { runCatching { fetchState(rev) }.getOrNull() }
                     if (got == null) {
                         offline()
@@ -381,7 +453,7 @@ class Engine private constructor(private val context: Context) {
                     delay(HEARTBEAT_MS)
                     if (playing) {
                         checkPlay()
-                        report()
+                        if (Net.free || SystemClock.elapsedRealtime() - lastReport >= HEARTBEAT_MOBILE_MS) report()
                     }
                 }
             }
@@ -424,6 +496,9 @@ class Engine private constructor(private val context: Context) {
     }
     fun track(id: String?): Track? = id?.let { library[it] ?: Track.guess(it) }
     fun artUrl(track: Track?, size: Int = 640): String? = if (track != null && track.art && hub.base.isNotBlank()) hub.artUrl(track.id, size) else null
+
+    /** The phone's own copy of the track a hub cover address is for, if there is one. */
+    fun localForArt(uri: Uri): Uri? = uri.path?.substringAfter("/art/", "")?.takeIf { it.isNotEmpty() }?.let { local[it] }
     fun isLocal(id: String) = id in local
     fun localUri(id: String): Uri? = local[id]
 
@@ -488,7 +563,7 @@ class Engine private constructor(private val context: Context) {
             slots = slots, playlists = views, elsewhere = elsewhere, hubOnline = hubOnline, hubUrl = hub.base,
             device = store.device, message = message, askSpeaker = askSpeaker, output = Speaker.outputName(context),
             onSpeaker = Speaker.isPhone(context), localCount = local.size, libraryCount = library.size,
-            customs = custom.values.toList(), playsRev = playsRev,
+            customs = custom.values.toList(), playsRev = playsRev, onWifi = Net.free, mobileUsed = Net.used(),
         )
         Widgets.update(context, _state.value)
     }
@@ -663,7 +738,7 @@ class Engine private constructor(private val context: Context) {
             withContext(Dispatchers.IO) {
                 runCatching {
                     val sent = System.currentTimeMillis() / 1000.0
-                    val o = hub.json("GET", "/api/session?playlist=${Hub.q(playlist)}&have=$have", timeoutMs = 1600)
+                    val o = hub.json("GET", "/api/session?playlist=${Hub.q(playlist)}&have=$have", timeoutMs = 1600, progress = true)
                     hubOffset = o.getDouble("now") - (sent + System.currentTimeMillis() / 1000.0) / 2
                     hubOnline = true
                     o.optJSONObject("session")?.let { Session.from(it, sessions[playlist]?.order) }
@@ -728,6 +803,7 @@ class Engine private constructor(private val context: Context) {
 
     private fun report(claim: Boolean = false) {
         val playlist = current ?: return
+        lastReport = SystemClock.elapsedRealtime()
         val idx = if (player.mediaItemCount > 0) player.currentMediaItemIndex else sessions[playlist]?.index ?: 0
         val pos = if (player.mediaItemCount > 0) player.currentPosition / 1000.0 else sessions[playlist]?.position ?: 0.0
         sessions[playlist] = Session(playlist, order, idx, pos, playing, store.device, hubNow(), unsent = true)
@@ -741,8 +817,10 @@ class Engine private constructor(private val context: Context) {
 
     private suspend fun sender() {
         while (true) {
-            if (outbox.isEmpty() && (playsOut.isEmpty() || hub.base.isBlank())) wake.receive()
-            if (playsOut.isNotEmpty() && hub.base.isNotBlank() && !sendPlays()) {
+            // play counts aren't progress, so they wait for Wi-Fi
+            val plays = playsOut.isNotEmpty() && hub.base.isNotBlank() && Net.free
+            if (outbox.isEmpty() && !plays) wake.receive()
+            if (plays && !sendPlays()) {
                 offline()
                 withTimeoutOrNull(20_000) { wake.receive() }
                 continue
@@ -756,14 +834,15 @@ class Engine private constructor(private val context: Context) {
             val body = JSONObject().put("device", store.device).put("playlist", playlist).put("index", session.index)
                 .put("position", session.position).put("playing", session.playing).put("orderHash", session.orderHash)
                 .put("claim", entry.first)
-            if (entry.first) body.put("order", JSONArray(session.order))
+            // Over mobile data the order (which can be long) only goes when the hub says it hasn't got it.
+            if (entry.first && Net.free) body.put("order", JSONArray(session.order))
             val reply = withContext(Dispatchers.IO) {
                 runCatching {
                     body.put("age", (System.currentTimeMillis() - entry.second) / 1000.0)
-                    var r = hub.json("POST", "/api/session", body)
+                    var r = hub.json("POST", "/api/session", body, progress = true)
                     if (r.optBoolean("needOrder")) {
                         body.put("order", JSONArray(session.order))
-                        r = hub.json("POST", "/api/session", body)
+                        r = hub.json("POST", "/api/session", body, progress = true)
                     }
                     r
                 }.getOrNull()
@@ -794,7 +873,7 @@ class Engine private constructor(private val context: Context) {
         scope.launch {
             val r = withContext(Dispatchers.IO) { runCatching { hub.json(method, path, body) }.getOrNull() }
             if (r == null) {
-                message = "Can't reach the hub, so that wasn't saved"
+                message = if (Net.free) "Can't reach the hub, so that wasn't saved" else "Off Wi-Fi, so that wasn't saved"
                 publish()
             }
             refresh()

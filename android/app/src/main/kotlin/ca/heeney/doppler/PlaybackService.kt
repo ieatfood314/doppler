@@ -1,11 +1,24 @@
 package ca.heeney.doppler
 
 import android.app.PendingIntent
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.content.Intent
 import androidx.annotation.OptIn
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.Player
+import androidx.media3.common.util.BitmapLoader
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSourceBitmapLoader
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.MoreExecutors
+import androidx.media3.session.CacheBitmapLoader
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -20,7 +33,8 @@ class PlaybackService : MediaSessionService() {
         super.onCreate()
         val engine = Engine.get(this)
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        session = MediaSession.Builder(this, Gate(engine.player, engine)).setSessionActivity(open).build()
+        session = MediaSession.Builder(this, Gate(engine.player, engine)).setSessionActivity(open)
+            .setBitmapLoader(CacheBitmapLoader(Covers(this, engine))).build()
         setMediaNotificationProvider(DefaultMediaNotificationProvider.Builder(this).build().apply { setSmallIcon(R.drawable.ic_notification) })
         // The app drives the player directly rather than through a MediaController, so nothing would ever
         // ask for this session. Media3 only posts the notification and goes foreground (which is what keeps
@@ -65,4 +79,29 @@ private class Gate(player: Player, private val engine: Engine) : ForwardingPlaye
             Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM).build()
 
     override fun isCommandAvailable(command: Int) = availableCommands.contains(command)
+}
+
+/** Covers for the notification and lock screen: the phone's own copy's picture first, then the hub's,
+ * which is only fetched on Wi-Fi. */
+@OptIn(UnstableApi::class)
+private class Covers(private val context: Context, private val engine: Engine) : BitmapLoader {
+    private val executor = DataSourceBitmapLoader.DEFAULT_EXECUTOR_SERVICE.get()
+    private val hub = DataSourceBitmapLoader(executor,
+        DefaultDataSource.Factory(context, WifiOnlySource.Factory(DefaultHttpDataSource.Factory(), wait = false)))
+
+    override fun supportsMimeType(mimeType: String) = hub.supportsMimeType(mimeType)
+    override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> = hub.decodeBitmap(data)
+
+    override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> {
+        val file = engine.localForArt(uri) ?: return hub.loadBitmap(uri)
+        val own = executor.submit<Bitmap?> {
+            val picture = runCatching {
+                val r = MediaMetadataRetriever()
+                try { r.setDataSource(context, file); r.embeddedPicture } finally { r.release() }
+            }.getOrNull()
+            picture?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+        }
+        return Futures.transformAsync(own, { b -> if (b != null) Futures.immediateFuture(b) else hub.loadBitmap(uri) },
+            MoreExecutors.directExecutor())
+    }
 }

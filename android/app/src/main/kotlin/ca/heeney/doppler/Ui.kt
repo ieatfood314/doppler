@@ -195,6 +195,8 @@ private fun TopLine(state: UiState) {
     val line = when {
         state.message.isNotEmpty() -> state.message
         state.hubUrl.isBlank() -> "Not synced: add your hub in All music, Settings"
+        !state.onWifi && state.mobileUsed >= Net.BUDGET -> "Mobile data used up. Syncs on Wi-Fi"
+        !state.onWifi -> "Off Wi-Fi: songs on the phone only"
         !state.hubOnline -> "Offline. Picks up the sync when the hub is back"
         else -> ""
     }
@@ -707,13 +709,17 @@ private fun SettingsPage(engine: Engine, state: UiState, askFiles: () -> Unit, b
         Spacer(Modifier.height(28.dp))
         Label("Music on this phone")
         if (LocalFiles.allowed(context)) {
-            Text("${state.localCount} of ${state.libraryCount} tracks play from the phone itself; the rest stream from the hub.",
+            Text("${state.localCount} of ${state.libraryCount} tracks play from the phone itself; the rest stream from the hub on Wi-Fi.",
                 color = Palette.Dust, size = 14)
         } else {
             Text("Everything streams from the hub. Let doppler see your music to play the copies already on the phone.",
                 color = Palette.Dust, size = 14, modifier = Modifier.padding(bottom = 10.dp))
             Pill("Use music on this phone", true, onClick = askFiles)
         }
+        Spacer(Modifier.height(28.dp))
+        Label("Mobile data")
+        Text("Only your place in the song is sent. ${"%.1f".format(state.mobileUsed / 1e6)} of ${Net.LIMIT_TEXT} this month.",
+            color = Palette.Dust, size = 14)
         Spacer(Modifier.weight(1f))
         Text("doppler ${BuildConfig.VERSION_NAME}", color = Palette.Faint, size = 12, modifier = Modifier.padding(bottom = 16.dp))
     }

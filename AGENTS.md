@@ -20,6 +20,7 @@ Two shuffle playlists on two keys, synced between computers and a phone. The REA
 - **Reports must be safe to send twice and out of order.** Players queue them while offline and replay them later.
 - **The phone never plays from its own speaker without asking**, including from the notification, a headset button or a widget. A yes lasts 10 minutes and is reset when the output changes.
 - **The service owns the notification.** `PlaybackService` hands its session to Media3 with `addSession` in `onCreate`, since the app drives ExoPlayer directly and no controller ever asks for it. Without that there's no media notification, no foreground service, and the music dies when the app is swiped away.
+- **The phone plays its own copy when it has one.** A queue built before the media index has been read streams every track from the hub for the life of the process, and big FLACs over Tailscale stall. So `play` waits (briefly) for the first scan, and each scan repoints the queued tracks with `useLocal`. A widget tap is often a cold start, because the system frees the app whenever it's idle.
 - **The desktop window is optional.** Nothing in the player may depend on it, and it must cost nothing when closed.
 
 ## Test

@@ -20,8 +20,6 @@ except Exception:  # pragma: no cover - depends on the machine
 ART_SIZES = (160, 640)
 COVER_NAMES = ("cover", "folder", "front", "album", "artwork")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
-# Part of the library's rev, so devices fetch the library again when the hub starts reading more tags.
-TAGS_VERSION = "2"
 
 
 def walk(root: str) -> dict[str, tuple[float, int]]:
@@ -187,10 +185,11 @@ class Library:
             pass
 
     def _set_rev(self):
-        digest = hashlib.sha1(TAGS_VERSION.encode())
+        """The rev covers what was read from each file, not only which files there are, so a scan that
+        reads more tags (a new hub reading a new field) sends every device to fetch the library again."""
+        digest = hashlib.sha1()
         for track_id in sorted(self.tracks):
-            entry = self.tracks[track_id]
-            digest.update(f"{track_id}\0{entry['m']}\0{entry['s']}\n".encode())
+            digest.update(f"{track_id}\0{json.dumps(self.tracks[track_id], sort_keys=True)}\n".encode())
         self.rev = digest.hexdigest()[:12]
 
     def scan(self, force: bool = False) -> bool:

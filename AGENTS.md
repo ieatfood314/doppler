@@ -44,6 +44,6 @@ To try the player without touching a real session, run a throwaway hub with its 
 ## Ship
 
 1. Run the tests, commit, then push to `main` (public: `github.com/ieatfood314/doppler`).
-2. The hub runs from this checkout as the user unit `doppler-hub.service`. After a Python change, run `systemctl --user restart doppler-hub`.
+2. The hub runs from `~/repos/doppler` (on `main`) as the user unit `doppler-hub.service`. After pushing from a worktree, `git -C ~/repos/doppler pull --ff-only` first (it has been left commits behind), then `systemctl --user restart doppler-hub`.
 3. Computers run a clone in `~/.local/share/doppler/app`. Run `update.sh` there after a player or window change.
 4. After a change under `android/`, run `android/release.sh "what changed"`. It builds from the pushed commit and creates the GitHub release `v1.0.<commit count>`; the phone picks it up through Obtainium.

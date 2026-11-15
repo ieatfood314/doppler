@@ -106,6 +106,17 @@ class Sessions(unittest.TestCase):
         self.assertTrue(claim["ok"])
         self.assertEqual(self.hub.public()["active"]["device"], "phone")
 
+    def test_a_claim_queued_offline_loses_to_a_later_press_on_the_device_that_already_had_it(self):
+        report(self.hub, "desk", claim=True, order=self.order)
+        self.clock.now += 86400
+        report(self.hub, "desk", claim=True, order=self.order, index=1)
+        self.clock.now += 900
+        # the phone pressed play twenty minutes ago, offline, five minutes before the desk's press
+        late = report(self.hub, "phone", claim=True, order=self.order, index=2, playing=False, age=1200)
+        self.assertFalse(late["ok"])
+        self.assertEqual(self.hub.public()["active"]["device"], "desk")
+        self.assertEqual(self.hub.session("f:1")["session"]["index"], 1)
+
     def test_moving_to_another_playlist_stops_the_old_one_playing(self):
         report(self.hub, "phone", claim=True, order=self.order)
         self.clock.now += 60

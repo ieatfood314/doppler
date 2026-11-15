@@ -1006,7 +1006,9 @@ class Engine private constructor(private val context: Context) {
             }
             if (reply == null) {
                 val newer = outbox[playlist]
-                outbox[playlist] = ((newer?.first ?: false) || entry.first) to (newer?.second ?: entry.second)
+                // A claim keeps the time of its press, or it would look newer than presses made elsewhere since
+                val at = if (newer == null || (entry.first && !newer.first)) entry.second else newer.second
+                outbox[playlist] = ((newer?.first ?: false) || entry.first) to at
                 store.saveOutbox(outbox)
                 offline()
                 // wait for the network, or for something new to say

@@ -195,6 +195,9 @@ class Hub:
                 if not active or active["device"] != device or active["playlist"] != playlist:
                     self.state["active"] = {"device": device, "playlist": playlist, "since": at}
                     visible = True
+                elif claim and at > active["since"]:
+                    # Pressed play again where it already was: a claim queued elsewhere before this press loses.
+                    active["since"] = at
                 if playing:
                     # One device plays one playlist, so nothing else is playing any more. Without this a
                     # device that moved to another playlist, or was taken over, stays "playing" there.

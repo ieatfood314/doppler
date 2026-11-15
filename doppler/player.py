@@ -306,7 +306,9 @@ class Player:
                 # Keep it for the next report to carry, unless a newer one is already waiting.
                 with self._outbox_ready:
                     newer = self._outbox.setdefault(playlist, item)
-                    newer["claim"] = newer["claim"] or item["claim"]
+                    if item["claim"] and not newer["claim"]:
+                        # a claim keeps the time of its press, or it would look newer than presses made elsewhere since
+                        newer["claim"], newer["at"] = True, item["at"]
                 self.events.put(("hub-offline", None))
                 time.sleep(5)
                 with self._outbox_ready:

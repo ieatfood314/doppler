@@ -82,6 +82,10 @@ data class UiState(
     val mobileUsed: Long = 0,
     val customs: List<CustomPlaylist> = emptyList(),
     val playsRev: Int = 0,
+    /** A press of play is on its way (reading the phone's files, asking the hub where the playlist was). */
+    val starting: Boolean = false,
+    /** ...and for which playlist. */
+    val pending: String? = null,
 )
 
 /** Everything the phone does with music. One per process, living on the main thread;
@@ -101,6 +105,8 @@ class Engine private constructor(private val context: Context) {
         const val HEARTBEAT_MOBILE_MS = 120_000L   // over mobile data, a word every two minutes is plenty
         const val SPEAKER_GRACE_MS = 10 * 60_000L
         const val LOCAL_WAIT_MS = 3_000L
+        const val MESSAGE_MS = 12_000L
+        const val RESUME_ON_WIFI_MS = 8 * 60_000L   // inside the ten minutes Media3 stays foreground after a stop
         const val CHANNEL = "speaker"
         const val TAG = "doppler"   // Log.i: Nothing OS drops Log.d from apps
     }
@@ -127,7 +133,12 @@ class Engine private constructor(private val context: Context) {
     private var hubOffset = 0.0
     private var hubOnline = false
     private var message = ""
-    private var errors = 0
+    private var messageJob: Job? = null
+    private var failures = 0            // tracks in a row that wouldn't play
+    private var retried: String? = null // the track that has had its second chance
+    private var starting: Job? = null
+    private var pendingPlaylist: String? = null
+    private var resumeOnWifiUntil = 0L  // stopped for want of Wi-Fi: carry on if it's back by then
     private var askSpeaker: PendingPlay? = null
     private var speakerAllowedUntil = 0L
     private var uiVisible = 0
@@ -173,24 +184,37 @@ class Engine private constructor(private val context: Context) {
             override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
                 // Moving on by itself means the last track played to its end.
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) checkPlay(ended = true)
-                listen++
+                if (item?.mediaId != listenTrack || reason != Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) listen++
                 listenTrack = item?.mediaId
                 Net.playingUri = item?.localConfiguration?.uri?.toString()
                 if (item != null && !Net.free && !onPhone(item)) {
-                    main.post { skipToPhoneCopy() }
+                    main.post { offWifi() }
                     return
                 }
-                if (item != null && current != null) {
-                    errors = 0
-                    report()
+                if (item != null && current != null) report()
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) {
+                    // Sound is coming out: whatever went wrong before is over.
+                    failures = 0
+                    retried = null
                 }
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 if (playWhenReady != playing && current != null) {
                     Log.i(TAG, "playWhenReady=$playWhenReady reason=$reason")
-                    if (!playWhenReady) checkPlay()
+                    if (!playWhenReady) {
+                        checkPlay()
+                        when (reason) {
+                            Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS -> stopped("Paused: another app is playing")
+                            Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY -> stopped("Paused: headphones disconnected")
+                            Player.PLAY_WHEN_READY_CHANGE_REASON_REMOTE -> stopped("Paused from another app")
+                        }
+                    }
                     playing = playWhenReady
+                    if (playing) resumeOnWifiUntil = 0
                     if (!playing) speakerAllowedUntil = maxOf(speakerAllowedUntil, SystemClock.elapsedRealtime() + SPEAKER_GRACE_MS)
                     report(claim = playing)
                     loops()
@@ -204,29 +228,7 @@ class Engine private constructor(private val context: Context) {
                 }
             }
 
-            override fun onPlayerError(error: PlaybackException) {
-                if (WifiOnlyErrors.notOnWifi(error)) {
-                    Log.i(TAG, "not on Wi-Fi: moving to the phone's own copies")
-                    main.post { skipToPhoneCopy() }
-                    return
-                }
-                errors++
-                Log.i(TAG, "error ${error.errorCodeName} on ${player.currentMediaItem?.localConfiguration?.uri?.scheme}: ${error.message}")
-                val exo = player
-                if (errors < 4 && exo.mediaItemCount > 1) {
-                    message = "Skipped a track that wouldn't play"
-                    val next = (exo.currentMediaItemIndex + 1) % exo.mediaItemCount
-                    exo.seekTo(next, 0)
-                    exo.prepare()
-                    exo.play()
-                } else {
-                    playing = false
-                    message = if (local.isEmpty() && !hubOnline) "The music isn't on this phone and the hub can't be reached"
-                    else "That wouldn't play: ${error.errorCodeName}"
-                    report()
-                }
-                publish()
-            }
+            override fun onPlayerError(error: PlaybackException) = failed(error)
         })
         return exo
     }
@@ -273,6 +275,20 @@ class Engine private constructor(private val context: Context) {
         if (Net.free) {
             wake.trySend(Unit)   // whatever waited for Wi-Fi (play counts, a full order) goes now
             refresh()
+            // The music stopped only because the stream went away: it carries on, as long as that won't be
+            // out of the phone's speaker.
+            val playlist = current
+            if (!playing && playlist != null && SystemClock.elapsedRealtime() < resumeOnWifiUntil) scope.launch {
+                // ...but not if another device has started playing since: that would take the music away from it.
+                val got = withContext(Dispatchers.IO) { runCatching { fetchState(null) }.getOrNull() } ?: return@launch
+                onHub(got)
+                val active = hubState?.active
+                val mine = active == null || active.device == store.device || active.since <= claimedAt
+                if (mine && !playing && current == playlist && SystemClock.elapsedRealtime() < resumeOnWifiUntil && !Speaker.isPhone(context)) {
+                    Log.i(TAG, "back on Wi-Fi: carrying on")
+                    requestPlay(playlist)
+                }
+            }
         }
         // Off Wi-Fi a streamed track plays what it has buffered, then the player's error moves on.
         publish()
@@ -280,29 +296,103 @@ class Engine private constructor(private val context: Context) {
 
     private fun onPhone(item: MediaItem) = item.localConfiguration?.uri?.scheme.let { it != "http" && it != "https" }
 
-    /** Off Wi-Fi: carry on from the next track that's on the phone, passing over the ones that aren't. */
-    private fun skipToPhoneCopy() {
+    /** Off Wi-Fi: carry on from the next track that's on the phone, passing over the ones that aren't.
+     * Unless the Wi-Fi is already back (it blinked, or Android checked it again), when the stream just goes on. */
+    private fun offWifi() {
         val exo = player
         if (exo.mediaItemCount == 0 || current == null) return
+        if (Net.check()) {
+            if (exo.playbackState == Player.STATE_IDLE) exo.prepare()   // the same track, from where it was
+            return
+        }
         var i = exo.currentMediaItemIndex
         while (i < exo.mediaItemCount && !onPhone(exo.getMediaItemAt(i))) i++
         if (i >= exo.mediaItemCount) {
-            message = "Off Wi-Fi, and the rest isn't on the phone"
             if (playing) {
                 playing = false
                 exo.pause()
+                stopped("Off Wi-Fi, and the rest isn't on the phone")
+                resumeOnWifiUntil = SystemClock.elapsedRealtime() + RESUME_ON_WIFI_MS
                 report()
             }
             publish()
             return
         }
         if (i != exo.currentMediaItemIndex) {
-            message = "Off Wi-Fi: skipped songs not on the phone"
+            say("Off Wi-Fi: skipped songs not on the phone")
             exo.seekTo(i, 0)
         }
         if (exo.playbackState == Player.STATE_IDLE) exo.prepare()
         if (playing) exo.play()
         publish()
+    }
+
+    /** A track that wouldn't play. It gets one more go first: the phone's own copy may have moved (Syncthing
+     * replaces a file, and the media index gives it a new address) or a stream may only have hiccuped. */
+    private fun failed(error: PlaybackException) {
+        val exo = player
+        val item = exo.currentMediaItem
+        Log.i(TAG, "error ${error.errorCodeName} on ${item?.localConfiguration?.uri?.scheme} ${item?.mediaId}: ${error.message}")
+        if (current == null || item == null) return
+        if (WifiOnlyErrors.notOnWifi(error)) return offWifi()
+        val id = item.mediaId
+        if (retried != id) {
+            retried = id
+            scope.launch {
+                if (item.localConfiguration?.uri?.scheme == "content") refreshLocal()
+                val i = exo.currentMediaItemIndex
+                if (current == null || exo.currentMediaItem?.mediaId != id || exo.playbackState != Player.STATE_IDLE) return@launch
+                val uri = source(id)
+                if (exo.currentMediaItem?.localConfiguration?.uri != uri) {
+                    val at = exo.currentPosition
+                    exo.replaceMediaItem(i, exo.getMediaItemAt(i).buildUpon().setUri(uri).build())
+                    exo.seekTo(i, at)
+                }
+                exo.prepare()
+            }
+            return
+        }
+        failures++
+        retried = null
+        if (failures < minOf(5, exo.mediaItemCount)) {
+            say("Skipped a song that wouldn't play")
+            val next = exo.currentMediaItemIndex + 1
+            if (next >= exo.mediaItemCount) wrap()
+            else {
+                exo.seekTo(next, 0)
+                exo.prepare()
+            }
+        } else {
+            playing = false
+            exo.pause()
+            stopped(when {
+                local.isEmpty() && !hubOnline -> "The music isn't on this phone and the hub can't be reached"
+                !Net.free && local.isEmpty() -> "Off Wi-Fi, and the music isn't on the phone"
+                else -> "Stopped: $failures songs in a row wouldn't play (${error.errorCodeName})"
+            })
+            report()
+        }
+        publish()
+    }
+
+    /** A line at the top of the screen for a little while. */
+    private fun say(text: String) {
+        message = text
+        messageJob?.cancel()
+        messageJob = if (text.isEmpty()) null else scope.launch {
+            delay(MESSAGE_MS)
+            if (message == text) {
+                message = ""
+                publish()
+            }
+        }
+    }
+
+    /** The music stopped without anyone here pressing pause: say why, and keep it for Settings. */
+    private fun stopped(why: String) {
+        Log.i(TAG, "stopped: $why")
+        say(why)
+        store.noteStop(why)
     }
 
     suspend fun refreshLocal() = rescanLocal().await()
@@ -322,10 +412,10 @@ class Engine private constructor(private val context: Context) {
 
     /** Before a queue is built: a cold start (a widget tap after the system freed the app) gets to play
      * before the first look at the phone's files is done, and without this the whole queue streamed. */
-    private suspend fun awaitLocal() {
+    private suspend fun awaitLocal(wait: Long = LOCAL_WAIT_MS) {
         if (scanned) return
         val pending = scan?.takeIf { it.isActive } ?: rescanLocal()
-        withTimeoutOrNull(LOCAL_WAIT_MS) { pending.await() }
+        withTimeoutOrNull(wait) { pending.await() }
     }
 
     /** Swap queued tracks to the phone's copy once it's known (or back to the hub if the copy went away).
@@ -494,6 +584,14 @@ class Engine private constructor(private val context: Context) {
         }
         return taggedCache
     }
+    /** A playlist's run from the song it's on: what's still to come, then what has played; null if this phone doesn't know. */
+    fun upNext(playlist: String): List<String>? {
+        val (run, at) = if (playlist == current && player.mediaItemCount > 0) order to player.currentMediaItemIndex
+        else sessions[playlist]?.let { it.order to it.index } ?: return null
+        if (run.isEmpty() || at !in run.indices) return null
+        return run.subList(at, run.size) + run.subList(0, at)
+    }
+
     fun track(id: String?): Track? = id?.let { library[it] ?: Track.guess(it) }
     fun artUrl(track: Track?, size: Int = 640): String? = if (track != null && track.art && hub.base.isNotBlank()) hub.artUrl(track.id, size) else null
 
@@ -561,7 +659,7 @@ class Engine private constructor(private val context: Context) {
             playlistName = current?.let { Core.playlistName(it, custom) } ?: "", track = track(currentTrack()),
             index = idx, count = if (player.mediaItemCount > 0) player.mediaItemCount else sessions[current ?: ""]?.order?.size ?: 0,
             slots = slots, playlists = views, elsewhere = elsewhere, hubOnline = hubOnline, hubUrl = hub.base,
-            device = store.device, message = message, askSpeaker = askSpeaker, output = Speaker.outputName(context),
+            device = store.device, message = message, askSpeaker = askSpeaker, output = Speaker.outputName(context), starting = starting != null, pending = pendingPlaylist.takeIf { starting != null },
             onSpeaker = Speaker.isPhone(context), localCount = local.size, libraryCount = library.size,
             customs = custom.values.toList(), playsRev = playsRev, onWifi = Net.free, mobileUsed = Net.used(),
         )
@@ -581,7 +679,23 @@ class Engine private constructor(private val context: Context) {
         }
         if (confirmed) speakerAllowedUntil = SystemClock.elapsedRealtime() + SPEAKER_GRACE_MS
         askSpeaker = null
-        scope.launch { play(playlist, track, fresh) }
+        resumeOnWifiUntil = 0
+        // Now, while whatever asked (the screen, a widget's tap) still counts as the user's doing: Android only
+        // lets a service go foreground from the background in a few cases, and without it the music dies
+        // when the app is swiped away or the system wants the memory.
+        ensureService()
+        // A second press while the first is still looking (a double tap, or 1 then 2 on a cold start): the last one wins.
+        starting?.cancel()
+        pendingPlaylist = playlist
+        starting = scope.launch {
+            try {
+                play(playlist, track, fresh)
+            } finally {
+                if (starting === coroutineContext[Job]) starting = null
+                publish()
+            }
+        }
+        publish()
         return true
     }
 
@@ -593,7 +707,7 @@ class Engine private constructor(private val context: Context) {
     }
 
     fun slot(n: String): Boolean {
-        val playlist = slots()[n] ?: run { message = "Nothing is set for $n"; publish(); return false }
+        val playlist = slots()[n] ?: run { say("Nothing is set for $n"); publish(); return false }
         if (playing && current == playlist) {
             pause()
             return true
@@ -609,6 +723,7 @@ class Engine private constructor(private val context: Context) {
     }
 
     fun pause() {
+        resumeOnWifiUntil = 0
         if (player.playWhenReady) player.pause()
         else if (playing) {
             playing = false
@@ -647,15 +762,15 @@ class Engine private constructor(private val context: Context) {
         report()
     }
 
-    private suspend fun play(playlist: String, track: String?, fresh: Boolean) {
+    /** Where a press of play on a playlist starts: its run through it, the song and the second. */
+    private class Plan(val order: List<String>, val index: Int, val position: Double)
+
+    /** Works out where to start: the hub's spot for the playlist (it may have moved on on another device), or this
+     * phone's own when it's newer or the hub can't be reached. Null when the playlist has nothing in it. */
+    private suspend fun plan(playlist: String, track: String?, fresh: Boolean, localWait: Long = LOCAL_WAIT_MS): Plan? {
         val tracks = tracksOf(playlist)
-        if (tracks.isEmpty()) {
-            message = "Nothing to play there yet"
-            publish()
-            return
-        }
-        checkPlay()
-        awaitLocal()
+        if (tracks.isEmpty()) return null
+        awaitLocal(localWait)
         val mode = modes()[playlist] ?: "shuffle"
         var base: Session? = null
         if (!fresh) {
@@ -663,45 +778,85 @@ class Engine private constructor(private val context: Context) {
             val mine = sessions[playlist]
             base = if (remote != null && mine != null && mine.unsent && mine.updated > remote.updated) mine else remote ?: mine
         }
-        val newOrder: List<String>
-        var index: Int
-        var position: Double
         if (base != null && base.order.isNotEmpty()) {
             val live = Core.livePosition(base.position, base.playing, base.device, base.updated, hubNow(), store.device)
             val fit = Core.reconcile(base.order, base.index, tracks, mode, rng)
-            newOrder = fit.order
-            if (track != null && track in newOrder) {
-                index = newOrder.indexOf(track); position = 0.0
-            } else {
-                val (i, p) = Core.resumePoint(newOrder, fit.index, live, library[newOrder[fit.index]]?.duration ?: 0.0, fit.sameTrack)
-                index = i; position = p
-            }
-        } else {
-            newOrder = Core.newOrder(tracks, mode, rng, first = track)
-            index = if (track != null) maxOf(newOrder.indexOf(track), 0) else 0
-            position = 0.0
+            if (track != null && track in fit.order) return Plan(fit.order, fit.order.indexOf(track), 0.0)
+            val (i, p) = Core.resumePoint(fit.order, fit.index, live, library[fit.order[fit.index]]?.duration ?: 0.0, fit.sameTrack)
+            return Plan(fit.order, i, p)
         }
-        val sameList = current == playlist && order == newOrder && player.mediaItemCount == newOrder.size
-        playing = true
+        val fresh2 = Core.newOrder(tracks, mode, rng, first = track)
+        return Plan(fresh2, if (track != null) maxOf(fresh2.indexOf(track), 0) else 0, 0.0)
+    }
+
+    /** Leaving the playlist that's loaded for another, mid-song: keep its exact spot, and tell the hub it isn't
+     * playing any more. Only if this phone was the one playing it, or it would put back a spot that's been moved on. */
+    private fun leave(next: String, wasPlaying: Boolean) {
+        val old = current ?: return
+        if (old == next || !wasPlaying || player.mediaItemCount == 0) return
+        sessions[old] = Session(old, order, player.currentMediaItemIndex, player.currentPosition / 1000.0, false,
+            store.device, hubNow(), unsent = true)
+        outbox[old] = (outbox[old]?.first ?: false) to System.currentTimeMillis()
+    }
+
+    private fun fresh() {
         claimedAt = hubNow()
-        message = ""
-        errors = 0
+        say("")
+        failures = 0
+        retried = null
+    }
+
+    private suspend fun play(playlist: String, track: String?, fresh: Boolean) {
+        checkPlay()
+        val p = plan(playlist, track, fresh) ?: run {
+            say("Nothing to play there yet")
+            publish()
+            return
+        }
+        val sameList = current == playlist && order == p.order && player.mediaItemCount == p.order.size
+        val wasPlaying = playing
+        playing = true
+        fresh()
         if (sameList) {
-            if (player.currentMediaItemIndex != index || kotlin.math.abs(player.currentPosition / 1000.0 - position) > 3 || track != null) {
-                if (player.currentMediaItemIndex == index) listen++  // the same track again, from the top
-                player.seekTo(index, (position * 1000).toLong())
+            if (player.currentMediaItemIndex != p.index || kotlin.math.abs(player.currentPosition / 1000.0 - p.position) > 3 || track != null) {
+                if (player.currentMediaItemIndex == p.index) listen++  // the same track again, from the top
+                player.seekTo(p.index, (p.position * 1000).toLong())
             }
         } else {
+            leave(playlist, wasPlaying)
             current = playlist
             store.current = playlist
-            order = newOrder
-            player.setMediaItems(newOrder.map { item(it) }, index, (position * 1000).toLong())
+            order = p.order
+            player.setMediaItems(p.order.map { item(it) }, p.index, (p.position * 1000).toLong())
         }
         player.prepare()
         player.play()
         ensureService()
         report(claim = true)
         loops()
+    }
+
+    /** A headset's play button or the system's resume control after the process had died, through Media3: the
+     * same start as a press of play, handed back as the queue for Media3 to load and play. Null when it shouldn't
+     * play now (out of the phone's speaker, so it asks instead). Quick, because the service has to go foreground
+     * within seconds of being started for this. */
+    fun resumption(done: (Triple<List<MediaItem>, Int, Long>?) -> Unit) {
+        if (!speakerOk()) {
+            askFromOutside()
+            return done(null)
+        }
+        val playlist = current ?: hubState?.active?.playlist ?: slots()["1"] ?: return done(null)
+        scope.launch {
+            checkPlay()
+            val p = withTimeoutOrNull(4_000) { plan(playlist, null, false, localWait = 1_500) }
+            if (p == null || playing || player.mediaItemCount > 0) return@launch done(null)
+            current = playlist
+            store.current = playlist
+            order = p.order
+            fresh()
+            // Media3 plays it, and the player's own callback makes the claim.
+            done(Triple(p.order.map { item(it) }, p.index, (p.position * 1000).toLong()))
+        }
     }
 
     private fun item(id: String): MediaItem {
@@ -753,7 +908,7 @@ class Engine private constructor(private val context: Context) {
         player.pause()
         current?.let { c -> sessions[c]?.let { sessions[c] = it.copy(unsent = false, playing = false) }; outbox.remove(c) }
         store.saveOutbox(outbox)
-        message = "Playing on $device now"
+        stopped("Playing on $device now")
         publish()
     }
 
@@ -809,7 +964,9 @@ class Engine private constructor(private val context: Context) {
         sessions[playlist] = Session(playlist, order, idx, pos, playing, store.device, hubNow(), unsent = true)
         store.saveSessions(sessions)
         val waiting = outbox[playlist]
-        outbox[playlist] = (claim || waiting?.first == true) to System.currentTimeMillis()
+        // A claim still waiting to go keeps the time it was made, so a newer press elsewhere still beats it.
+        val at = if (!claim && waiting?.first == true) waiting.second else System.currentTimeMillis()
+        outbox[playlist] = (claim || waiting?.first == true) to at
         store.saveOutbox(outbox)
         wake.trySend(Unit)
         publish()
@@ -873,7 +1030,7 @@ class Engine private constructor(private val context: Context) {
         scope.launch {
             val r = withContext(Dispatchers.IO) { runCatching { hub.json(method, path, body) }.getOrNull() }
             if (r == null) {
-                message = if (Net.free) "Can't reach the hub, so that wasn't saved" else "Off Wi-Fi, so that wasn't saved"
+                say(if (Net.free) "Can't reach the hub, so that wasn't saved" else "Off Wi-Fi, so that wasn't saved")
                 publish()
             }
             refresh()
@@ -885,7 +1042,7 @@ class Engine private constructor(private val context: Context) {
     fun setMode(playlist: String, mode: String) = hubEdit("PUT", "/api/mode", JSONObject().put("playlist", playlist).put("mode", mode))
 
     fun clearMessage() {
-        message = ""
+        say("")
         publish()
     }
 
@@ -906,4 +1063,10 @@ class Engine private constructor(private val context: Context) {
     }
 
     fun gate(): Boolean = speakerOk()
+
+    /** Android wouldn't let the service go foreground, so the music may be cut off soon. */
+    fun foregroundRefused() {
+        stopped("Android stopped the music running in the background")
+        publish()
+    }
 }

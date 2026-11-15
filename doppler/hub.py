@@ -24,6 +24,10 @@ MIME = {
 }
 
 
+# Players report at least this often while playing (the phone every two minutes on mobile data).
+QUIET = 180.0
+
+
 class Hub:
     """Everything the hub knows, behind one lock. The HTTP layer below only translates."""
 
@@ -79,10 +83,13 @@ class Hub:
     def public(self) -> dict:
         with self.changed:
             sessions = {}
+            now = self.clock()
             for playlist, s in self.state["sessions"].items():
                 order = s["order"]
+                # A device that went quiet mid-song (killed, out of battery, out of range) isn't playing any more.
+                playing = s["playing"] and now - s["updated"] < QUIET
                 sessions[playlist] = {
-                    "playlist": playlist, "index": s["index"], "position": s["position"], "playing": s["playing"],
+                    "playlist": playlist, "index": s["index"], "position": s["position"], "playing": playing,
                     "device": s["device"], "updated": s["updated"], "orderHash": s["orderHash"],
                     "count": len(order), "track": order[s["index"]] if 0 <= s["index"] < len(order) else None,
                 }
@@ -155,8 +162,14 @@ class Hub:
             active = self.state["active"]
             other_active = bool(active and active["device"] != device)
             if claim:
-                if s and s["device"] != device and at < s["updated"] - 1:
-                    return {"ok": False, "stale": True, "superseded": playing and other_active, "active": active}
+                if s and s["device"] != device:
+                    # Someone has moved this playlist on since the claim was made. A device that is still
+                    # playing it only sends heartbeats, which move nothing; what counts is when it started.
+                    moved = s["updated"]
+                    if s["playing"] and active and active["device"] == s["device"] and active["playlist"] == playlist:
+                        moved = active["since"]
+                    if at < moved - 1:
+                        return {"ok": False, "stale": True, "superseded": playing and other_active, "active": active}
                 if playing and other_active and at < active["since"]:
                     return {"ok": False, "superseded": True, "active": active}
             else:
@@ -182,6 +195,13 @@ class Hub:
                 if not active or active["device"] != device or active["playlist"] != playlist:
                     self.state["active"] = {"device": device, "playlist": playlist, "since": at}
                     visible = True
+                if playing:
+                    # One device plays one playlist, so nothing else is playing any more. Without this a
+                    # device that moved to another playlist, or was taken over, stays "playing" there.
+                    for other, session in self.state["sessions"].items():
+                        if other != playlist and session["playing"]:
+                            session["playing"] = False
+                            visible = True
             if visible:
                 self._bump()
             self._save(now=visible)
@@ -281,7 +301,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header(key, value)
         self.end_headers()
         if self.command != "HEAD":
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass   # the device hung up first (a long poll it gave up on)
 
     def _json(self, data, status: int | None = None, extra: dict | None = None):
         if status is None:

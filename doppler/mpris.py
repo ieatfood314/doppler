@@ -82,11 +82,17 @@ class Mpris(dbus.service.Object):
         if interface == PLAYER:
             return {"PlaybackStatus": self._status(), "LoopStatus": "Playlist", "Rate": 1.0, "Shuffle": True,
                     "Metadata": self._metadata(), "Volume": 1.0,
-                    "Position": dbus.Int64(int(self.player.call(self.player.position, timeout=1.0) * 1e6)
-                                           if self.state["loaded"] else 0),
+                    "Position": dbus.Int64(self._position()),
                     "MinimumRate": 1.0, "MaximumRate": 1.0, "CanGoNext": True, "CanGoPrevious": True,
                     "CanPlay": True, "CanPause": True, "CanSeek": True, "CanControl": True}
         return {}
+
+    def _position(self) -> int:
+        if not self.state["loaded"]:
+            return 0
+        value = self.player.call(self.player.position, timeout=1.0)
+        # a busy player answers with an error dict; the last known spot will do
+        return int((value if isinstance(value, (int, float)) else self.state["position"]) * 1e6)
 
     @dbus.service.method(PROPS, in_signature="ss", out_signature="v")
     def Get(self, interface, name):

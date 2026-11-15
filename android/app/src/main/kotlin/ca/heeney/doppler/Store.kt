@@ -7,6 +7,10 @@ import java.io.File
 
 /** What the phone remembers between runs, so it can play with no network at all. */
 class Store(context: Context) {
+    companion object {
+        const val STOPS_KEPT = 12
+    }
+
     private val prefs = context.getSharedPreferences("doppler", Context.MODE_PRIVATE)
     private val dir = context.filesDir
 
@@ -31,6 +35,19 @@ class Store(context: Context) {
     var current: String?
         get() = prefs.getString("current", null)
         set(value) = prefs.edit().putString("current", value).apply()
+
+    /** The last few times the music stopped by itself, newest first: (wall-clock ms, why). */
+    fun stops(): List<Pair<Long, String>> {
+        val a = runCatching { JSONArray(prefs.getString("stops", "[]")) }.getOrNull() ?: return emptyList()
+        return List(a.length()) { a.getJSONArray(it).let { e -> e.getLong(0) to e.getString(1) } }
+    }
+
+    fun noteStop(why: String) {
+        val kept = listOf(System.currentTimeMillis() to why) + stops().take(STOPS_KEPT - 1)
+        val a = JSONArray()
+        for ((at, text) in kept) a.put(JSONArray().put(at).put(text))
+        prefs.edit().putString("stops", a.toString()).apply()
+    }
 
     private fun read(name: String): String? = File(dir, name).takeIf { it.exists() }?.readText()
 

@@ -1,6 +1,7 @@
 package ca.heeney.doppler
 
 import android.provider.Settings
+import android.text.format.DateUtils
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
@@ -39,6 +40,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -179,7 +183,7 @@ private fun Home(engine: Engine, state: UiState, open: (Screen) -> Unit) {
             }
             if (h < 10.dp) Spacer(Modifier)
         }
-        NowPlaying(engine, state)
+        NowPlaying(engine, state, open)
         Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("All music", Modifier.clip(RoundedCornerShape(12.dp)).clickable { open(Screen.Library) }.padding(vertical = 10.dp, horizontal = 2.dp),
                 color = Palette.Dust, size = 15, weight = FontWeight.Medium)
@@ -250,6 +254,7 @@ private fun SlotWords(state: UiState, slot: String, view: PlaylistView?, lit: Bo
         val note = when {
             view == null -> "Long-press to choose"
             lit -> "Playing"
+            state.starting && state.pending == view.id -> "Starting"
             view.lastTrack == null -> "Shuffled, from the top"
             view.lastPlaying && view.lastDevice != state.device -> "Playing on ${view.lastDevice}"
             view.lastDevice != null && view.lastDevice != state.device -> "Left off on ${view.lastDevice}"
@@ -261,7 +266,7 @@ private fun SlotWords(state: UiState, slot: String, view: PlaylistView?, lit: Bo
 }
 
 @Composable
-private fun NowPlaying(engine: Engine, state: UiState) {
+private fun NowPlaying(engine: Engine, state: UiState, open: (Screen) -> Unit) {
     val track = state.track ?: return
     var position by remember { mutableLongStateOf(engine.position()) }
     var duration by remember { mutableLongStateOf(engine.duration()) }
@@ -275,8 +280,13 @@ private fun NowPlaying(engine: Engine, state: UiState) {
     }
     val color = state.slots.entries.firstOrNull { it.value == state.playlist }?.key?.let { Palette.slot(it) } ?: Palette.Starlight
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-        Text(track.title, color = Palette.Starlight, size = 24, family = Type.Display, maxLines = 1)
-        Text(listOf(track.artist, state.playlistName).filter { it.isNotEmpty() }.joinToString(", from "), color = Palette.Dust, size = 14, maxLines = 1)
+        // The song and where it's from open that playlist, at the song.
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = state.playlist != null) { state.playlist?.let { open(Screen.Playlist(it)) } }
+            .semantics { contentDescription = "${track.title}. Open ${state.playlistName.ifBlank { "the playlist" }}" }) {
+            Text(track.title, color = Palette.Starlight, size = 24, family = Type.Display, maxLines = 1)
+            Text(listOf(track.artist, state.playlistName).filter { it.isNotEmpty() }.joinToString(", from "), color = Palette.Dust, size = 14, maxLines = 1)
+        }
         Spectrum(track.id, position, duration, color, Modifier.fillMaxWidth().height(40.dp).padding(top = 10.dp)) { engine.seek(it) }
         Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(clock(position), color = Palette.Faint, size = 12)
@@ -500,7 +510,12 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
     var sort by remember { mutableStateOf(engine.store.sort) }
     var choosingSort by remember { mutableStateOf(false) }
     val q = find.trim().lowercase()
-    val shown = remember(tracks, q, sort, state.playsRev) { sortTracks(engine, tracks.filter { q.isEmpty() || it.matches(q) }, sort) }
+    val next = remember(id, state.playlist, state.index, state.count) { engine.upNext(id) }
+    val sorts = if (next != null) SORTS else SORTS - "next"
+    val sorting = sort.takeIf { it in sorts } ?: "default"
+    val shown = remember(tracks, q, sorting, state.playsRev, next) {
+        sortTracks(engine, tracks.filter { q.isEmpty() || it.matches(q) }, sorting, next)
+    }
     val selected = remember(id) { mutableStateListOf<String>() }
     var adding by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
@@ -518,9 +533,15 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
         TopBar(back, searching, find, { find = it }, "Find in ${view?.name ?: "this playlist"}",
             openSearch = if (tracks.size > 1) ({ searching = true }) else null,
             closeSearch = { searching = false; find = "" },
-            sortOn = sort != "default", openSort = if (tracks.size > 1) ({ choosingSort = true }) else null,
+            sortOn = sorting != "default", openSort = if (tracks.size > 1) ({ choosingSort = true }) else null,
             openMore = { more = true })
-        LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+        // Opened on the playlist that's playing, the list starts at the song (the header is the first item).
+        val list = rememberLazyListState()
+        LaunchedEffect(id) {
+            val at = shown.indexOfFirst { it.id == state.track?.id }
+            if (state.playlist == id && at > 2) list.scrollToItem(at)
+        }
+        LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list) {
             item {
                 Title(view?.name ?: "Playlist")
                 val about = buildString {
@@ -557,7 +578,7 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
             }
             items(shown, key = { it.id }) { t ->
                 val picked = t.id in selected
-                TrackRow(engine, t, state.track?.id == t.id && state.playlist == id, picked, note = sortNote(engine, t, sort),
+                TrackRow(engine, t, state.track?.id == t.id && state.playlist == id, picked, note = sortNote(engine, t, sorting),
                     onClick = { if (pickMode) { if (picked) selected.remove(t.id) else selected.add(t.id) } else engine.requestPlay(id, t.id) },
                     onLong = { if (picked) selected.remove(t.id) else selected.add(t.id) })
             }
@@ -583,8 +604,8 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
     }
     if (choosingSort) Sheet({ choosingSort = false }) {
         Text("Sort by", color = Palette.Starlight, size = 22, family = Type.Display, modifier = Modifier.padding(bottom = 8.dp))
-        for (key in SORTS) {
-            val on = key == sort
+        for (key in sorts) {
+            val on = key == sorting
             Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
                 sort = key
                 engine.store.sort = key
@@ -619,10 +640,10 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
     }
 }
 
-private val SORTS = listOf("default", "title", "artist", "album", "most", "least", "recent")
+private val SORTS = listOf("default", "next", "title", "artist", "album", "most", "least", "recent")
 
 private fun sortName(key: String, kind: String?) = when (key) {
-    "title" -> "Title"; "artist" -> "Artist"; "album" -> "Album"
+    "next" -> "Up next"; "title" -> "Title"; "artist" -> "Artist"; "album" -> "Album"
     "most" -> "Most played"; "least" -> "Least played"; "recent" -> "Recently played"
     else -> when (kind) { "custom" -> "Order added"; "artist", "album" -> "Album order"; else -> "File order" }
 }
@@ -630,9 +651,13 @@ private fun sortName(key: String, kind: String?) = when (key) {
 private fun Track.matches(q: String) = title.lowercase().contains(q) || artist.lowercase().contains(q) || album.lowercase().contains(q)
 
 /** Blank names go last; ties keep the playlist's own order (sortedWith is stable). */
-private fun sortTracks(engine: Engine, tracks: List<Track>, sort: String): List<Track> {
+private fun sortTracks(engine: Engine, tracks: List<Track>, sort: String, next: List<String>?): List<Track> {
     fun text(f: (Track) -> String) = compareBy<Track> { f(it).isBlank() }.thenBy(Core.natural, f)
     return when (sort) {
+        "next" -> next?.let { order ->
+            val at = order.withIndex().associate { it.value to it.index }
+            tracks.sortedBy { at[it.id] ?: Int.MAX_VALUE }
+        } ?: tracks
         "title" -> tracks.sortedWith(text { it.title })
         "artist" -> tracks.sortedWith(text { it.artist }.then(text { it.album }))
         "album" -> tracks.sortedWith(text { it.album })
@@ -714,7 +739,9 @@ private fun SettingsPage(engine: Engine, state: UiState, askFiles: () -> Unit, b
     var hub by rememberSaveable { mutableStateOf(state.hubUrl) }
     var device by rememberSaveable { mutableStateOf(state.device) }
     val context = LocalContext.current
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().padding(horizontal = 22.dp)) {
+    val stops = remember(state.message) { engine.store.stops() }
+    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState())
+        .padding(horizontal = 22.dp)) {
         Header("Settings", back)
         Label("Hub address")
         Field(hub, { hub = it }, "https://doppler.example.ts.net")
@@ -738,7 +765,18 @@ private fun SettingsPage(engine: Engine, state: UiState, askFiles: () -> Unit, b
         Label("Mobile data")
         Text("Only your place in the song is sent. ${"%.1f".format(state.mobileUsed / 1e6)} of ${Net.LIMIT_TEXT} this month.",
             color = Palette.Dust, size = 14)
-        Spacer(Modifier.weight(1f))
+        if (stops.isNotEmpty()) {
+            Spacer(Modifier.height(28.dp))
+            Label("When the music stopped by itself")
+            val now = System.currentTimeMillis()
+            for ((at, why) in stops.take(6)) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.Top) {
+                    Text(why, Modifier.weight(1f).padding(end = 12.dp), color = Palette.Dust, size = 14)
+                    Text(DateUtils.getRelativeTimeSpanString(at, now, DateUtils.MINUTE_IN_MILLIS).toString(), color = Palette.Faint, size = 12)
+                }
+            }
+        }
+        Spacer(Modifier.height(36.dp))
         Text("doppler ${BuildConfig.VERSION_NAME}", color = Palette.Faint, size = 12, modifier = Modifier.padding(bottom = 16.dp))
     }
 }

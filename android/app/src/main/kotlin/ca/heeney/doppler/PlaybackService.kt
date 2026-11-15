@@ -18,6 +18,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
+import com.google.common.util.concurrent.SettableFuture
 import androidx.media3.session.CacheBitmapLoader
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
@@ -34,7 +35,11 @@ class PlaybackService : MediaSessionService() {
         val engine = Engine.get(this)
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         session = MediaSession.Builder(this, Gate(engine.player, engine)).setSessionActivity(open)
+            .setCallback(Resume(engine))
             .setBitmapLoader(CacheBitmapLoader(Covers(this, engine))).build()
+        setListener(object : Listener {
+            override fun onForegroundServiceStartNotAllowedException() = engine.foregroundRefused()
+        })
         setMediaNotificationProvider(DefaultMediaNotificationProvider.Builder(this).build().apply { setSmallIcon(R.drawable.ic_notification) })
         // The app drives the player directly rather than through a MediaController, so nothing would ever
         // ask for this session. Media3 only posts the notification and goes foreground (which is what keeps
@@ -56,6 +61,21 @@ class PlaybackService : MediaSessionService() {
     }
 }
 
+/** A headset's play button (or the system's resume control) after the process had died: Media3 starts the service
+ * and asks what to play. The engine works it out the same way as a press of play. */
+@OptIn(UnstableApi::class)
+private class Resume(private val engine: Engine) : MediaSession.Callback {
+    override fun onPlaybackResumption(session: MediaSession, controller: MediaSession.ControllerInfo):
+        ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+        val answer = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
+        engine.resumption { queue ->
+            if (queue == null) answer.setException(UnsupportedOperationException("nothing to resume now"))
+            else answer.set(MediaSession.MediaItemsWithStartPosition(queue.first, queue.second, queue.third))
+        }
+        return answer
+    }
+}
+
 /** What outside controls see. Play goes through the same "out loud?" check as the screen,
  * and next at the end of a run reshuffles instead of stopping. */
 @OptIn(UnstableApi::class)
@@ -63,16 +83,22 @@ private class Gate(player: Player, private val engine: Engine) : ForwardingPlaye
     override fun play() {
         when {
             !engine.gate() -> engine.askFromOutside()
-            wrappedPlayer.mediaItemCount == 0 -> engine.resume()
+            // nothing loaded, or stopped on an error: a full start, which picks up the hub's spot and resets things
+            wrappedPlayer.mediaItemCount == 0 || wrappedPlayer.playbackState == Player.STATE_IDLE -> engine.resume()
             else -> super.play()
         }
     }
 
     override fun setPlayWhenReady(playWhenReady: Boolean) = if (playWhenReady) play() else super.setPlayWhenReady(false)
-    override fun seekToNext() = engine.next()
-    override fun seekToNextMediaItem() = engine.next()
-    override fun seekToPrevious() = engine.previous()
-    override fun seekToPreviousMediaItem() = engine.previous()
+    // Skipping while paused starts the music too, so it asks first like play does.
+    override fun seekToNext() = step { engine.next() }
+    override fun seekToNextMediaItem() = step { engine.next() }
+    override fun seekToPrevious() = step { engine.previous() }
+    override fun seekToPreviousMediaItem() = step { engine.previous() }
+
+    private fun step(go: () -> Unit) {
+        if (engine.gate()) go() else engine.askFromOutside()
+    }
 
     override fun getAvailableCommands(): Player.Commands = super.getAvailableCommands().buildUpon()
         .addAll(Player.COMMAND_PLAY_PAUSE, Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,

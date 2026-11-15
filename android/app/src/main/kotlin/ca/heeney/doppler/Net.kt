@@ -13,7 +13,10 @@ import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.ContentDataSource
 import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.FileDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
@@ -130,7 +133,7 @@ object Net {
     }
 
     /** Called with every chunk downloaded while on Wi-Fi. The flags say Wi-Fi, but if the phone's cellular
-     * counter grows by half as much as the app downloads, the bytes are really coming over mobile data
+     * counter grows by nearly as much as the app downloads, the bytes are really coming over mobile data
      * (however the VPN or Android got it wrong), so everything stops until the networks change. */
     @Synchronized
     fun downloaded(bytes: Int) {
@@ -145,7 +148,9 @@ object Net {
         tripOurs += bytes
         if (tripOurs < 512 * 1024) return
         val mobile = TrafficStats.getMobileRxBytes()
-        if (mobile >= 0 && mobile - tripMobile >= tripOurs / 2) {
+        // Over mobile data the cellular counter grows by all of it and more; other apps on mobile data while this one
+        // is on Wi-Fi rarely come close in the same half-minute.
+        if (mobile >= 0 && mobile - tripMobile >= tripOurs * 9 / 10) {
             Log.i(Engine.TAG, "tripwire: ${tripOurs / 1024} KB downloaded and cellular grew ${(mobile - tripMobile) / 1024} KB; stopping")
             tripped = true
             recompute()
@@ -243,13 +248,27 @@ class WifiOnlySource(private val upstream: DataSource, private val wait: Boolean
     override fun close() = upstream.close()
 }
 
-/** Not being on Wi-Fi isn't a network hiccup to retry: the player hears about it at once. */
+/** How the player treats a stream that broke off. Leaving the Wi-Fi is tried again every second or so: a retry
+ * costs nothing (the source refuses before touching the network), and Wi-Fi that only blinked (or that Android
+ * re-checked) picks the stream up again where it was. A stream that stays broken is surfaced once what's buffered
+ * has played, and the engine moves on to the phone's own copies. Hiccups over Tailscale get more tries than usual
+ * before the track is given up on. */
 @OptIn(UnstableApi::class)
-class WifiOnlyErrors : DefaultLoadErrorHandlingPolicy() {
-    override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long =
-        if (notOnWifi(loadErrorInfo.exception)) C.TIME_UNSET else super.getRetryDelayMsFor(loadErrorInfo)
+class WifiOnlyErrors : DefaultLoadErrorHandlingPolicy(RETRIES) {
+    override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+        val e = loadErrorInfo.exception
+        return when {
+            notOnWifi(e) -> 1_200
+            // A file that's gone or unreadable won't come back by waiting: the engine looks again at once.
+            e is ContentDataSource.ContentDataSourceException || e is FileDataSource.FileDataSourceException ||
+                (e is HttpDataSource.InvalidResponseCodeException && e.responseCode in 400..499) -> C.TIME_UNSET
+            else -> super.getRetryDelayMsFor(loadErrorInfo)
+        }
+    }
 
     companion object {
+        const val RETRIES = 6
+
         fun notOnWifi(error: Throwable?): Boolean {
             var e = error
             var depth = 0

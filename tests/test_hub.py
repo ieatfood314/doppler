@@ -96,6 +96,31 @@ class Sessions(unittest.TestCase):
         self.assertTrue(late["superseded"])
         self.assertEqual(self.hub.session("f:1")["session"]["index"], 1)
 
+    def test_a_press_of_play_beats_the_other_devices_heartbeat_that_got_there_first(self):
+        from doppler.core import order_hash
+        report(self.hub, "desk", claim=True, order=self.order)
+        self.clock.now += 600
+        # the phone's claim was made two seconds ago; a heartbeat from the desk landed in between
+        report(self.hub, "desk", position=600.0, orderHash=order_hash(self.order))
+        claim = report(self.hub, "phone", claim=True, order=self.order, index=0, position=598.0, age=2)
+        self.assertTrue(claim["ok"])
+        self.assertEqual(self.hub.public()["active"]["device"], "phone")
+
+    def test_moving_to_another_playlist_stops_the_old_one_playing(self):
+        report(self.hub, "phone", claim=True, order=self.order)
+        self.clock.now += 60
+        report(self.hub, "phone", "f:2", claim=True, order=["2/x.mp3"])
+        sessions = self.hub.public()["sessions"]
+        self.assertFalse(sessions["f:1"]["playing"])
+        self.assertTrue(sessions["f:2"]["playing"])
+
+    def test_a_device_that_went_quiet_is_not_playing(self):
+        report(self.hub, "phone", claim=True, order=self.order)
+        self.clock.now += 60
+        self.assertTrue(self.hub.public()["sessions"]["f:1"]["playing"])
+        self.clock.now += 600
+        self.assertFalse(self.hub.public()["sessions"]["f:1"]["playing"])
+
     def test_session_fetch_skips_an_order_the_caller_already_has(self):
         from doppler.core import order_hash
         report(self.hub, "desk", claim=True, order=self.order)

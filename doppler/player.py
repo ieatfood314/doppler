@@ -261,8 +261,10 @@ class Player:
         self.sessions[self.current] = session
         with self._outbox_ready:
             waiting = self._outbox.get(self.current)
-            self._outbox[self.current] = {"session": session, "claim": claim or bool(waiting and waiting["claim"]),
-                                          "at": time.monotonic()}
+            # A claim still waiting to go keeps the time it was made, so a newer press elsewhere still beats it.
+            held = bool(waiting and waiting["claim"])
+            self._outbox[self.current] = {"session": session, "claim": claim or held,
+                                          "at": waiting["at"] if held and not claim else time.monotonic()}
             self._outbox_ready.notify()
         self._save()
         self.bump()
@@ -512,9 +514,13 @@ class Player:
         def run():
             try:
                 if subprocess.run(["pgrep", "-x", "easyeffects"], capture_output=True).returncode != 0:
-                    subprocess.Popen(["easyeffects", "--gapplication-service"], stdin=subprocess.DEVNULL,
+                    # In its own scope, not this service's: restarting the player must not take the EQ with it.
+                    launch = ["easyeffects", "--gapplication-service"]
+                    if shutil.which("systemd-run"):
+                        launch = ["systemd-run", "--user", "--scope", "--collect", "--quiet"] + launch
+                    subprocess.Popen(launch, stdin=subprocess.DEVNULL,
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-                    time.sleep(1.0)
+                    time.sleep(1.5)
                 subprocess.run(["easyeffects", "-l", preset], capture_output=True, timeout=10)
             except Exception:
                 pass
@@ -619,9 +625,11 @@ class Player:
         if name == "doppler-mpv-gone":
             self.target = None
             if self.playing:
+                # mpv died under us (crashed, or killed): say so, and tell the hub the music stopped here
                 self.playing = False
                 self.paused_at = time.monotonic()
-                self.bump()
+                self.message = "The music stopped: mpv quit"
+                self._report()
             return
         if name == "playback-restart":
             self.target = None

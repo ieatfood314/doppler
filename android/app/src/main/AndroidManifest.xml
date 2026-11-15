@@ -50,6 +50,10 @@
             </intent-filter>
         </service>
 
+        <!-- A headset's play button after the process has died starts the service, which resumes the playlist. -->
+        <receiver android:name="androidx.media3.session.MediaButtonReceiver" android:exported="true">
+            <intent-filter><action android:name="android.intent.action.MEDIA_BUTTON" /></intent-filter>
+        </receiver>
         <receiver android:name=".WidgetButtons" android:exported="false" />
         <receiver android:name=".WideWidget" android:exported="false" android:label="doppler 1 2">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>

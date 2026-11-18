@@ -94,6 +94,7 @@ private sealed interface Screen {
     data object Home : Screen
     data object Library : Screen
     data object Recent : Screen
+    data object Listening : Screen
     data class Playlist(val id: String) : Screen
     data class Browse(val kind: String) : Screen
     data object Settings : Screen
@@ -120,6 +121,7 @@ fun App(engine: Engine, askFiles: () -> Unit, opening: String? = null, opened: (
                 Screen.Home -> Home(engine, state, open = { stack.add(it) })
                 Screen.Library -> Library(engine, state, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
                 Screen.Recent -> RecentPage(engine, state, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
+                Screen.Listening -> ListeningPage(engine, state, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
                 is Screen.Playlist -> PlaylistPage(engine, state, s.id, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
                 is Screen.Browse -> BrowsePage(state, s.kind, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
                 Screen.Settings -> SettingsPage(engine, state, askFiles, back = { stack.removeAt(stack.lastIndex) })
@@ -461,6 +463,18 @@ private fun RecentPage(engine: Engine, state: UiState, open: (Screen) -> Unit, b
     var acting by remember { mutableStateOf<Track?>(null) }
     LazyColumn(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 22.dp)) {
         item { Header("Recent", back) }
+        item {
+            // The way in to Listening, with this month's time so far.
+            val month = remember(state.playsRev) { java.time.YearMonth.now().toString() }
+            var months by remember { mutableStateOf(engine.months) }
+            LaunchedEffect(state.playsRev) { months = engine.loadMonths() }
+            val heard = months.firstOrNull { it.month == month }?.seconds ?: 0L
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { open(Screen.Listening) }.padding(vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("Listening", Modifier.weight(1f), color = Palette.Starlight, size = 18, family = Type.Display)
+                if (heard > 0) Text(hoursMinutes(heard) + " this month", color = Palette.Faint, size = 13)
+            }
+        }
         if (lists.isEmpty() && songs.isEmpty()) item {
             Text("Nothing played yet", color = Palette.Dust, size = 15, modifier = Modifier.padding(vertical = 14.dp))
         }
@@ -474,6 +488,102 @@ private fun RecentPage(engine: Engine, state: UiState, open: (Screen) -> Unit, b
         item { Spacer(Modifier.height(40.dp)) }
     }
     acting?.let { TrackMenu(engine, state, it, null, open) { acting = null } }
+}
+
+/** How much was heard in a month, everywhere together: the hours drawn in stars, the months before it
+ * as columns of stars (tap one to see it), and who and what was heard most. */
+@Composable
+private fun ListeningPage(engine: Engine, state: UiState, open: (Screen) -> Unit, back: () -> Unit) {
+    var months by remember { mutableStateOf(engine.months) }
+    var loaded by remember { mutableStateOf(false) }
+    LaunchedEffect(state.playsRev) { months = engine.loadMonths(); loaded = true }
+    val now = remember { java.time.YearMonth.now() }
+    val keys = remember(now) { (11 downTo 0).map { now.minusMonths(it.toLong()) } }
+    var picked by rememberSaveable { mutableStateOf(now.toString()) }
+    val m = months.firstOrNull { it.month == picked } ?: MonthHeard(picked, 0, 0, 0, emptyList(), emptyList())
+    val pickedMonth = java.time.YearMonth.parse(picked)
+    val monthName = pickedMonth.month.getDisplayName(java.time.format.TextStyle.FULL_STANDALONE, java.util.Locale.getDefault())
+    var acting by remember { mutableStateOf<Track?>(null) }
+    LazyColumn(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 22.dp)) {
+        item { Header("Listening", back) }
+        item {
+            val inHours = m.seconds >= 3600
+            val amount = (m.seconds / if (inHours) 3600 else 60).toString()
+            val unit = if (inHours) (if (amount == "1") "hour" else "hours") else (if (amount == "1") "minute" else "minutes")
+            Row(Modifier.padding(top = 14.dp).semantics { contentDescription = "$amount $unit" }, verticalAlignment = Alignment.Bottom) {
+                for (d in amount) DotNumeral(d.toString(), 84.dp, Palette.Starlight, lit = false, animate = false, modifier = Modifier.padding(end = 12.dp))
+                Text(unit, color = Palette.Dust, size = 17, modifier = Modifier.padding(start = 10.dp))
+            }
+            val parts = listOfNotNull("$monthName ${pickedMonth.year}",
+                m.plays.takeIf { it > 0 }?.let { if (it == 1) "1 play" else "$it plays" },
+                m.songs.takeIf { it > 0 }?.let { if (it == 1) "1 song" else "$it songs" })
+            Text(parts.joinToString(", "), color = Palette.Dust, size = 13, modifier = Modifier.padding(top = 14.dp))
+        }
+        item {
+            val values = keys.map { k -> months.firstOrNull { it.month == k.toString() }?.seconds ?: 0L }
+            MonthStars(keys.map { it.toString() }, values, picked, Modifier.padding(top = 24.dp)) { picked = it }
+        }
+        if (m.artists.isNotEmpty()) item { Section("Artists") }
+        items(m.artists, key = { "a" + it.first }) { (name, seconds) ->
+            val artist = state.playlists.firstOrNull { it.kind == "artist" && it.name.equals(name, true) }
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+                .then(if (artist != null) Modifier.clickable { open(Screen.Playlist(artist.id)) } else Modifier)
+                .padding(start = 4.dp, top = 11.dp, bottom = 11.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(name, Modifier.weight(1f), color = Palette.Starlight, size = 16, maxLines = 1)
+                Text(hoursMinutes(seconds), color = Palette.Faint, size = 13)
+            }
+        }
+        if (m.top.isNotEmpty()) item { Section("Songs") }
+        items(m.top, key = { "s" + it.first }) { (id, seconds, _) ->
+            val t = engine.track(id) ?: return@items
+            TrackRow(engine, t, state.track?.id == t.id, selected = false, note = hoursMinutes(seconds),
+                onClick = { engine.requestPlay("f:" + t.id.substringBeforeLast("/", ""), t.id) }, onLong = {}, onMore = { acting = t })
+        }
+        if (loaded && m.seconds == 0L) item {
+            Text("Nothing heard in $monthName", color = Palette.Dust, size = 15, modifier = Modifier.padding(vertical = 26.dp))
+        }
+        item { Spacer(Modifier.height(40.dp)) }
+    }
+    acting?.let { TrackMenu(engine, state, it, null, open) { acting = null } }
+}
+
+/** Twelve months as columns of stars, the tallest month nine stars high. Tap a column to pick it. */
+@Composable
+private fun MonthStars(keys: List<String>, values: List<Long>, picked: String, modifier: Modifier, pick: (String) -> Unit) {
+    val rows = 9
+    val top = values.maxOrNull() ?: 0L
+    Column(modifier.fillMaxWidth()) {
+        Canvas(Modifier.fillMaxWidth().height(112.dp).pointerInput(keys) {
+            detectTapGestures { p -> pick(keys[(p.x / (size.width / keys.size)).toInt().coerceIn(0, keys.lastIndex)]) }
+        }.semantics { contentDescription = "Listening by month" }) {
+            val col = size.width / keys.size
+            val pitch = minOf(col * 0.5f, size.height / rows)
+            keys.forEachIndexed { i, key ->
+                val v = values[i]
+                val lit = if (v > 0 && top > 0) maxOf(1, Math.round(v.toFloat() / top * rows)) else 0
+                val on = key == picked
+                val x = (i + 0.5f) * col
+                for (r in 0 until rows) {
+                    val center = Offset(x, size.height - (r + 0.5f) * pitch)
+                    if (r < lit) drawCircle(if (on) Palette.Starlight else Palette.Dust.copy(alpha = 0.55f), pitch * 0.33f, center)
+                    else drawCircle(Palette.Faint.copy(alpha = 0.45f), pitch * 0.07f, center)
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+            for (key in keys) {
+                val letter = java.time.YearMonth.parse(key).month.getDisplayName(java.time.format.TextStyle.NARROW_STANDALONE, java.util.Locale.getDefault())
+                Text(letter, Modifier.weight(1f).clickable { pick(key) }, color = if (key == picked) Palette.Starlight else Palette.Faint,
+                    size = 12, align = TextAlign.Center, maxLines = 1)
+            }
+        }
+    }
+}
+
+/** "6 h 05 m", or "45 m" under an hour. */
+private fun hoursMinutes(seconds: Long): String {
+    val m = seconds / 60
+    return if (m >= 60) "%d h %02d m".format(m / 60, m % 60) else "$m m"
 }
 
 /** Everything you can do to one song: add it to a playlist, take it out of this one, go to its

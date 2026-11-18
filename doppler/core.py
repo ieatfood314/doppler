@@ -310,3 +310,68 @@ def total_plays(sources: dict) -> dict:
             old = out.get(track)
             out[track] = [old[0] + count, max(old[1], last)] if old else [count, last]
     return out
+
+
+# --- listening time, month by month
+
+def add_listening(into: dict, month: str, track: str, seconds: float = 0.0, plays: int = 0):
+    """Add to a device's running totals: {month: {track: [seconds heard, plays]}}. Months are the
+    device's own local "YYYY-MM"."""
+    entry = into.setdefault(month, {}).setdefault(track, [0.0, 0])
+    entry[0] = round(entry[0] + max(0.0, seconds), 1)
+    entry[1] += plays
+
+
+def merge_listening(into: dict, listened: dict) -> bool:
+    """Fold a device's running totals in, keeping the larger of each. Like play counts, every device
+    sends absolute totals, so this is safe to repeat and to receive in any order."""
+    changed = False
+    if not isinstance(listened, dict):
+        return False
+    for month, tracks in listened.items():
+        if not isinstance(tracks, dict) or not re.fullmatch(r"\d{4}-\d{2}", str(month)):
+            continue
+        for track, value in tracks.items():
+            try:
+                seconds, plays = float(value[0]), int(value[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            mine = into.setdefault(str(month), {})
+            old = mine.get(track)
+            new = [max(seconds, old[0]), max(plays, old[1])] if old else [seconds, plays]
+            if new != old:
+                mine[str(track)] = new
+                changed = True
+    return changed
+
+
+def listening_months(sources: dict, tags: dict, top: int = 5) -> list[dict]:
+    """Every month anyone listened, newest first: time heard and songs played on every device
+    together, how many different songs, and the artists and songs heard most."""
+    months: dict[str, dict] = {}
+    for listened in sources.values():
+        for month, tracks in listened.items():
+            into = months.setdefault(month, {})
+            for track, (seconds, plays) in tracks.items():
+                old = into.get(track) or [0.0, 0]
+                into[track] = [old[0] + seconds, old[1] + plays]
+    out = []
+    for month in sorted(months, reverse=True):
+        tracks = months[month]
+        artists: dict[str, list] = {}
+        for track, (seconds, _) in tracks.items():
+            meta = tags.get(track) or {}
+            name = str(meta.get("artist") or meta.get("albumartist") or "").strip() or split_title(track)[0]
+            if name:
+                entry = artists.setdefault(_norm(name), [name, 0.0])
+                entry[1] += seconds
+        songs = sorted(tracks.items(), key=lambda kv: (-kv[1][0], kv[0]))
+        out.append({
+            "month": month,
+            "seconds": round(sum(s for s, _ in tracks.values())),
+            "plays": sum(p for _, p in tracks.values()),
+            "songs": sum(1 for s, p in tracks.values() if p or s >= 30),
+            "artists": [[n, round(s)] for n, s in sorted(artists.values(), key=lambda e: (-e[1], e[0]))[:top]],
+            "top": [[t, round(s), p] for t, (s, p) in songs[:top]],
+        })
+    return out

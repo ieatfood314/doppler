@@ -95,6 +95,9 @@ class Store(context: Context) {
 
     fun savePlays(name: String, plays: Map<String, Play>) = write(name, playsJson(plays).toString())
 
+    fun loadJson(name: String): JSONObject? = read(name)?.let { runCatching { JSONObject(it) }.getOrNull() }
+    fun saveJson(name: String, o: JSONObject) = write(name, o.toString())
+
     /** Reports the hub hasn't had yet: playlist -> (claim, wall-clock ms when it happened). */
     fun loadOutbox(): MutableMap<String, Pair<Boolean, Long>> {
         val o = read("outbox.json")?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return HashMap()

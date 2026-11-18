@@ -166,5 +166,31 @@ class Plays(unittest.TestCase):
         self.assertEqual(totals, {"a": [5, 70.0], "b": [1, 10.0]})
 
 
+    def test_listening_time_merges_like_play_counts(self):
+        mine = {}
+        core.add_listening(mine, "2026-11", "a", 100.04)
+        core.add_listening(mine, "2026-11", "a", 50.0, plays=1)
+        self.assertEqual(mine, {"2026-11": {"a": [150.0, 1]}})
+        hub = {}
+        self.assertTrue(core.merge_listening(hub, mine))
+        self.assertFalse(core.merge_listening(hub, mine), "the same send twice changes nothing")
+        core.merge_listening(hub, {"2026-11": {"a": [90.0, 0]}})
+        self.assertEqual(hub["2026-11"]["a"], [150.0, 1], "an older send arriving late changes nothing")
+        core.merge_listening(hub, {"junk": {"a": [1, 1]}, "2026-10": {"b": "junk"}})
+        self.assertNotIn("junk", hub)
+
+    def test_listening_months_add_up_devices_newest_first(self):
+        tags = {"1/a.flac": {"artist": "Queen"}, "1/b.flac": {"artist": "queen"}, "1/c.flac": {"artist": "Muse"}}
+        months = core.listening_months({
+            "desk": {"2026-11": {"1/a.flac": [600.0, 2], "1/c.flac": [200.0, 1]}, "2026-10": {"1/a.flac": [60.0, 0]}},
+            "phone": {"2026-11": {"1/b.flac": [300.0, 1], "2/Abba - Waterloo.mp3": [10.0, 0]}},
+        }, tags)
+        self.assertEqual([m["month"] for m in months], ["2026-11", "2026-10"])
+        nov = months[0]
+        self.assertEqual((nov["seconds"], nov["plays"], nov["songs"]), (1110, 4, 3))
+        self.assertEqual(nov["artists"], [["Queen", 900], ["Muse", 200], ["Abba", 10]])
+        self.assertEqual(nov["top"][0], ["1/a.flac", 600, 2])
+
+
 if __name__ == "__main__":
     unittest.main()

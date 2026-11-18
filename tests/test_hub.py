@@ -273,6 +273,16 @@ class Plays(unittest.TestCase):
     def test_needs_a_source(self):
         self.assertFalse(self.hub.add_plays({"plays": {}})["ok"])
 
+    def test_listening_time_adds_up_and_survives_a_restart(self):
+        rev = self.hub.public()["playsRev"]
+        self.assertTrue(self.hub.add_plays({"source": "desk-1", "listened": {"2026-11": {"1/a.flac": [120.0, 1]}}})["ok"])
+        self.assertEqual(self.hub.public()["playsRev"], rev, "time alone wakes nobody")
+        self.hub.add_plays({"source": "phone-1", "plays": {}, "listened": {"2026-11": {"1/a.flac": [60.0, 0]}}})
+        self.hub.add_plays({"source": "desk-1", "listened": {"2026-11": {"1/a.flac": [100.0, 1]}}})
+        self.assertEqual(self.hub.listening_months()[0]["seconds"], 180)
+        self.hub.flush()
+        self.assertEqual(Hub(self.dir.name, clock=Clock()).listening_months()[0]["seconds"], 180)
+
 
 if __name__ == "__main__":
     unittest.main()

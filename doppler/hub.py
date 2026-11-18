@@ -48,6 +48,17 @@ class Hub:
             pass
         self._saved_at = 0.0
         self._dirty = False
+        # Listening time per device and month, {source: {month: {track: [seconds, plays]}}}. It grows by
+        # the month, so it has its own file instead of riding along with every position report.
+        self.listening_path = os.path.join(data_dir, "listening.json")
+        self.listening: dict = {}
+        try:
+            with open(self.listening_path) as handle:
+                self.listening = json.load(handle)
+        except (OSError, ValueError):
+            pass
+        self._listening_saved_at = 0.0
+        self._listening_dirty = False
         self.trash_dir = os.path.join(data_dir, "trash")
         self.use_gio = True
 
@@ -65,10 +76,24 @@ class Hub:
         self._saved_at = self.clock()
         self._dirty = False
 
+    def _save_listening(self, now: bool = False):
+        """Written at most once a minute: every playing device adds to it every few minutes."""
+        self._listening_dirty = True
+        if not now and self.clock() - self._listening_saved_at < 60:
+            return
+        tmp = self.listening_path + ".tmp"
+        with open(tmp, "w") as handle:
+            json.dump(self.listening, handle, separators=(",", ":"))
+        os.replace(tmp, self.listening_path)
+        self._listening_saved_at = self.clock()
+        self._listening_dirty = False
+
     def flush(self):
         with self.changed:
             if self._dirty:
                 self._save()
+            if self._listening_dirty:
+                self._save_listening(now=True)
 
     def _bump(self):
         self.state["rev"] += 1
@@ -133,19 +158,30 @@ class Hub:
             totals = {t: totals[t] for t in tracks if t in totals}
         return totals
 
+    def listening_months(self) -> list:
+        """How much was heard each month, on every device together, newest first."""
+        with self.changed:
+            sources = json.loads(json.dumps(self.listening))
+        tags = self.library.tracks if self.library else {}
+        return core.listening_months(sources, tags)
+
     # --- writing
 
     def add_plays(self, body: dict) -> dict:
-        """A device's running play counts. `source` is that install's own id (not its name, so a
-        reinstall starts a fresh tally instead of being ignored until it catches up)."""
+        """A device's running play counts, and its listening time month by month (`listened`).
+        `source` is that install's own id (not its name, so a reinstall starts a fresh tally instead
+        of being ignored until it catches up)."""
         source = str(body.get("source") or "").strip()
-        plays = body.get("plays")
-        if not source or not isinstance(plays, dict):
+        plays = body.get("plays") or {}
+        listened = body.get("listened")
+        if not source or not isinstance(plays, dict) or not (plays or isinstance(listened, dict)):
             return {"ok": False, "error": "source and plays are required"}
         with self.changed:
             if core.merge_plays(self.state["plays"].setdefault(source, {}), plays):
                 self.state["playsRev"] += 1
                 self._save()
+            if isinstance(listened, dict) and core.merge_listening(self.listening.setdefault(source, {}), listened):
+                self._save_listening()
         return {"ok": True, "playsRev": self.state["playsRev"], "plays": self.plays(plays.keys())}
 
     def report(self, body: dict) -> dict:
@@ -450,6 +486,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(hub.wait(int(query.get("rev", 0)), timeout))
         if path == "/api/plays":
             return self._json({"playsRev": hub.state["playsRev"], "plays": hub.plays()})
+        if path == "/api/listening":
+            return self._json({"months": hub.listening_months()})
         if path == "/api/session":
             return self._json(hub.session(query.get("playlist", ""), query.get("have")))
         if path == "/api/library":

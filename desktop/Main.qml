@@ -27,11 +27,18 @@ Window {
     property real fetchedAt: 0
     property real now: Date.now()
     property bool libraryOpen: false
-    property string drawerView: "library"   // what the drawer shows under a playlist: "library" or "recent"
+    property string drawerView: "library"   // what the drawer shows under a playlist: "library", "recent" or "listening"
     property string openPlaylist: ""
     property var recentTracks: []
     function loadRecent() { call("GET", "/recent", null, function (d) { if (d) recentTracks = d }) }
-    function showDrawer(v) { drawerView = v; openPlaylist = ""; libraryOpen = true; if (v === "recent") loadRecent() }
+    property var listening: null             // {months: [{month, seconds, plays, songs, artists, top}], local}
+    property string listenMonth: monthKey(0)
+    function loadListening() { call("GET", "/listening", null, function (d) { if (d && d.months) listening = d }) }
+    function showDrawer(v) {
+        drawerView = v; openPlaylist = ""; libraryOpen = true
+        if (v === "recent") loadRecent()
+        if (v === "listening") { listenMonth = monthKey(0); loadListening() }
+    }
     function closeDrawer() { libraryOpen = false; openPlaylist = "" }
     // Playlists played lately, newest first, the ones on a key left out (they're on the home screen).
     function recentPlaylists() {
@@ -98,13 +105,23 @@ Window {
         interval: 2500; running: args.indexOf("--shot") >= 0
         onTriggered: { win.contentItem.grabToImage(function (r) { r.saveToFile(args[args.indexOf("--shot") + 1]); Qt.quit() }) }
     }
-    Timer { interval: 900; running: args.indexOf("--library") >= 0; onTriggered: { var i = args.indexOf("--library"); if (args[i + 1] && args[i + 1].indexOf("--") !== 0) showPlaylist(args[i + 1]); else if (args[i + 1] === "--recent") showDrawer("recent"); else libraryOpen = true } }
+    Timer { interval: 900; running: args.indexOf("--library") >= 0; onTriggered: { var i = args.indexOf("--library"); if (args[i + 1] && args[i + 1].indexOf("--") !== 0) showPlaylist(args[i + 1]); else if (args[i + 1] === "--recent") showDrawer("recent"); else if (args[i + 1] === "--listening") showDrawer("listening"); else libraryOpen = true } }
 
     function position() {
         if (!st) return 0
         return st.position + (st.playing ? Math.max(0, (now - fetchedAt) / 1000) : 0)
     }
     function counted(n) { return n === 1 ? "1 track" : n + " tracks" }
+    // "2026-11" for this month, or `back` months before it.
+    function monthKey(back) { var d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - back); return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) }
+    function monthDate(key) { return new Date(+key.slice(0, 4), +key.slice(5, 7) - 1, 1) }
+    function monthOf(key) {
+        var none = { month: key, seconds: 0, plays: 0, songs: 0, artists: [], top: [] }
+        if (!listening) return none
+        for (var i = 0; i < listening.months.length; i++) if (listening.months[i].month === key) return listening.months[i]
+        return none
+    }
+    function hm(s) { var m = Math.floor((s || 0) / 60); return m >= 60 ? Math.floor(m / 60) + " h " + ("0" + (m % 60)).slice(-2) + " m" : m + " m" }
     function clock(s) { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2) }
     function view(id) { if (!st) return null; for (var i = 0; i < st.playlists.length; i++) if (st.playlists[i].id === id) return st.playlists[i]; return null }
     function loadTracks(id) { call("GET", "/tracks?playlist=" + encodeURIComponent(id), null, function (d) { if (d) tracks = d }) }
@@ -113,6 +130,7 @@ Window {
     onPlaysRevChanged: {
         if (openPlaylist && (sortBy === "most" || sortBy === "least" || sortBy === "recent")) loadTracks(openPlaylist)
         if (libraryOpen && drawerView === "recent") loadRecent()
+        if (libraryOpen && drawerView === "listening") loadListening()
     }
     // A song left the library (deleted here or anywhere else): drop it from the lists on show.
     property int libraryCount: st ? st.libraryCount : 0
@@ -237,7 +255,8 @@ Window {
     }
 
     // ------------------------------------------------------------ wavefronts
-    // The 1 and the 2 as stars on a 5 by 7 grid, the same grid as the phone's Dots.kt. While lit, the
+    // The 1 and the 2 (and the other digits, for the hours on Listening) as stars on a 5 by 7 grid,
+    // the same grid as the phone's Dots.kt. While lit, the
     // stars twinkle out of step; the timer only runs then, so a closed or idle window costs nothing.
     component DotNumeral: Canvas {
         id: dn
@@ -246,8 +265,16 @@ Window {
         property bool lit: false
         property real phase: 0
         readonly property var glyphs: ({
+            "0": [".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
             "1": ["..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."],
-            "2": [".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"] })
+            "2": [".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"],
+            "3": [".###.", "#...#", "....#", "..##.", "....#", "#...#", ".###."],
+            "4": ["...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."],
+            "5": ["#####", "#....", "#....", "####.", "....#", "#...#", ".###."],
+            "6": ["..###", ".#...", "#....", "####.", "#...#", "#...#", ".###."],
+            "7": ["#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..."],
+            "8": [".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."],
+            "9": [".###.", "#...#", "#...#", ".####", "....#", "...#.", ".##.."] })
         width: height * 5 / 7
         onToneChanged: requestPaint(); onLitChanged: requestPaint(); onDigitChanged: requestPaint(); onPhaseChanged: requestPaint()
         Timer { running: dn.lit && dn.visible; repeat: true; interval: 50; onTriggered: dn.phase = (dn.phase + 0.098) % (Math.PI * 2) }
@@ -418,7 +445,7 @@ Window {
         Row {
             anchors.verticalCenter: parent.verticalCenter; spacing: 8
             Repeater {
-                model: [["library", "All music"], ["recent", "Recent"]]
+                model: [["library", "All music"], ["recent", "Recent"], ["listening", "Listening"]]
                 // A second press on the open one closes the drawer.
                 Pill { required property var modelData; label: modelData[1]
                     strong: libraryOpen && !openPlaylist && drawerView === modelData[0]
@@ -444,7 +471,8 @@ Window {
             id: drawerBar
             anchors { top: parent.top; left: parent.left; right: parent.right; margins: 16 }
             height: 36
-            IconButton { mark: "back"; tip: drawerView === "recent" ? "Back to Recent" : "Back to All music"; visible: openPlaylist !== ""
+            IconButton { mark: "back"; tip: drawerView === "recent" ? "Back to Recent" : drawerView === "listening" ? "Back to Listening" : "Back to All music"
+                visible: openPlaylist !== ""
                 onClicked: openPlaylist = "" }
             IconButton { id: plMore; anchors.right: closeButton.left; anchors.rightMargin: 4; mark: "more"; tip: "More"; visible: openPlaylist !== ""
                 onClicked: plMenu.popup(plMore, plMore.width - 220, plMore.height + 4) }
@@ -514,6 +542,105 @@ Window {
                 delegate: TrackRow { required property var modelData; track: modelData; note: ago(modelData.last)
                     current: st && st.track && st.track.id === modelData.id
                     onPlay: act("/play", { playlist: folderOf(modelData.id), track: modelData.id }) }
+            }
+        }
+
+        // How much was heard in a month, and the months before it as columns of stars.
+        Item {
+            id: listenPage
+            anchors { top: drawerBar.bottom; left: parent.left; right: parent.right; bottom: parent.bottom; margins: 24; topMargin: 4 }
+            visible: openPlaylist === "" && drawerView === "listening"
+            property var m: { listening; return monthOf(listenMonth) }
+            property bool hours: m.seconds >= 3600
+            property string amount: String(Math.floor(m.seconds / (hours ? 3600 : 60)))
+            Text { id: listenTitle; text: "Listening"; color: starlight; font.family: sans.name; font.pixelSize: 34; font.weight: Font.Medium }
+            Flickable {
+                anchors { top: listenTitle.bottom; left: parent.left; right: parent.right; bottom: parent.bottom; topMargin: 18 }
+                clip: true; contentHeight: listenCol.height; boundsBehavior: Flickable.StopAtBounds
+                Column {
+                    id: listenCol
+                    width: parent.width
+                    Row {
+                        spacing: 22
+                        Row {
+                            spacing: 14
+                            Repeater { model: listenPage.amount.split("")
+                                DotNumeral { required property string modelData; digit: modelData; height: 98; tone: starlight } }
+                        }
+                        Words { anchors.bottom: parent.bottom; anchors.bottomMargin: -4; color: dust; font.pixelSize: 17
+                            text: listenPage.hours ? (listenPage.amount === "1" ? "hour" : "hours") : (listenPage.amount === "1" ? "minute" : "minutes") }
+                    }
+                    Words { topPadding: 14; width: parent.width; color: dust; font.pixelSize: 13
+                        text: monthDate(listenMonth).toLocaleDateString(Qt.locale(), "MMMM yyyy")
+                            + (listenPage.m.plays ? ", " + listenPage.m.plays + (listenPage.m.plays === 1 ? " play" : " plays") : "")
+                            + (listenPage.m.songs ? ", " + listenPage.m.songs + (listenPage.m.songs === 1 ? " song" : " songs") : "")
+                            + (listening && listening.local ? ", this computer only" : "") }
+                    Item { width: 1; height: 22 }
+                    Canvas {
+                        id: chart
+                        width: parent.width; height: 128
+                        property var keys: { var k = []; for (var i = 11; i >= 0; i--) k.push(monthKey(i)); return k }
+                        property var values: { listening; return keys.map(function (k) { return monthOf(k).seconds }) }
+                        readonly property int rows: 9
+                        property int hover: -1
+                        onValuesChanged: requestPaint(); onWidthChanged: requestPaint(); onHoverChanged: requestPaint()
+                        Connections { target: win; function onListenMonthChanged() { chart.requestPaint() } }
+                        onPaint: {
+                            var c = getContext("2d"); c.reset()
+                            var col = width / 12, pitch = Math.min(col * 0.5, height / rows), top = Math.max.apply(null, values)
+                            for (var i = 0; i < 12; i++) {
+                                var v = values[i], lit = v > 0 && top > 0 ? Math.max(1, Math.round(v / top * rows)) : 0
+                                var on = keys[i] === listenMonth, x = (i + 0.5) * col
+                                for (var r = 0; r < rows; r++) {
+                                    var y = height - (r + 0.5) * pitch
+                                    if (r < lit) {
+                                        var t = on ? starlight : dust, a = on ? 1 : (i === hover ? 0.85 : 0.55)
+                                        c.fillStyle = Qt.rgba(t.r, t.g, t.b, a); c.beginPath(); c.arc(x, y, pitch * 0.33, 0, Math.PI * 2); c.fill()
+                                    } else {
+                                        c.fillStyle = Qt.rgba(0.29, 0.275, 0.376, 0.45); c.beginPath(); c.arc(x, y, pitch * 0.07, 0, Math.PI * 2); c.fill()
+                                    }
+                                }
+                            }
+                        }
+                        MouseArea { anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            function at(x) { return Math.max(0, Math.min(11, Math.floor(x / (width / 12)))) }
+                            onPositionChanged: function (e) { chart.hover = at(e.x) }
+                            onExited: chart.hover = -1
+                            onClicked: function (e) { listenMonth = chart.keys[at(e.x)] } }
+                        ToolTip.visible: hover >= 0; ToolTip.delay: 300
+                        ToolTip.text: hover >= 0 ? monthDate(keys[hover]).toLocaleDateString(Qt.locale(), "MMMM") + ": " + hm(values[hover]) : ""
+                    }
+                    Row {
+                        width: parent.width
+                        Repeater { model: chart.keys
+                            Words { required property string modelData; width: parent.width / 12; horizontalAlignment: Text.AlignHCenter
+                                font.pixelSize: 11; color: modelData === listenMonth ? starlight : faint
+                                text: monthDate(modelData).toLocaleDateString(Qt.locale(), "MMM") } }
+                    }
+                    Words { visible: listenPage.m.artists.length > 0; topPadding: 26; bottomPadding: 4; color: dust; font.pixelSize: 13; font.weight: Font.Medium; text: "Artists" }
+                    Repeater { model: listenPage.m.artists
+                        Item {
+                            required property var modelData
+                            property var pv: { if (!st) return null; var n = modelData[0].toLowerCase()
+                                for (var i = 0; i < st.playlists.length; i++) if (st.playlists[i].kind === "artist" && st.playlists[i].name.toLowerCase() === n) return st.playlists[i]
+                                return null }
+                            width: parent.width; height: 40
+                            Rectangle { anchors.fill: parent; radius: 10; color: artistMouse.containsMouse && parent.pv ? "#0f0d18" : "transparent" }
+                            Words { anchors { left: parent.left; right: artistTime.left; leftMargin: 8; rightMargin: 10; verticalCenter: parent.verticalCenter }
+                                text: modelData[0] }
+                            Words { id: artistTime; anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter }
+                                color: faint; font.pixelSize: 12; text: hm(modelData[1]) }
+                            MouseArea { id: artistMouse; anchors.fill: parent; hoverEnabled: true; enabled: !!parent.pv; cursorShape: Qt.PointingHandCursor
+                                onClicked: showPlaylist(parent.pv.id) }
+                        } }
+                    Words { visible: listenPage.m.top.length > 0; topPadding: 16; bottomPadding: 4; color: dust; font.pixelSize: 13; font.weight: Font.Medium; text: "Songs" }
+                    Repeater { model: listenPage.m.top
+                        TrackRow { required property var modelData; width: listenCol.width; track: modelData; note: hm(modelData.seconds)
+                            current: st && st.track && st.track.id === modelData.id
+                            onPlay: act("/play", { playlist: folderOf(modelData.id), track: modelData.id }) } }
+                    Words { visible: listening !== null && listenPage.m.seconds === 0; topPadding: 26; color: dust
+                        text: "Nothing heard in " + monthDate(listenMonth).toLocaleDateString(Qt.locale(), "MMMM") }
+                }
             }
         }
 

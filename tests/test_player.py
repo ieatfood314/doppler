@@ -34,6 +34,32 @@ class Counting(unittest.TestCase):
         p._check_play()
         self.assertEqual(self.plays(), 2)
 
+    def test_time_heard_goes_to_the_track_that_was_sounding(self):
+        import time
+        from unittest import mock
+        p = self.player
+        month = time.strftime("%Y-%m")
+        clock = [1000.0]
+        with mock.patch("doppler.player.time.monotonic", lambda: clock[0]):
+            p.core_idle = False
+            p._tally()
+            clock[0] += 30
+            p._tally()
+            p.index = 1  # moved on
+            clock[0] += 5
+            p._tally()
+            p.core_idle = True  # buffering
+            p._tally()
+            clock[0] += 50
+            p._tally()
+        self.assertEqual(p.listened[month], {"1/a.flac": [35.0, 0]})
+        p.target = 150.0
+        p._check_play()
+        self.assertEqual(p.listened[month]["1/b.flac"], [0.0, 1])
+        months = p._listening_named(None)["months"]
+        self.assertEqual(months[0]["top"][0]["id"], "1/a.flac")
+        self.assertEqual(months[0]["top"][0]["seconds"], 35)
+
     def test_recent_is_newest_first_and_skips_unplayed(self):
         p = self.player
         p.library["1/c.flac"] = {"id": "1/c.flac", "title": "c", "duration": 200}

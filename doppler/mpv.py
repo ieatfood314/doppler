@@ -12,7 +12,7 @@ import subprocess
 import threading
 import time
 
-OBSERVED = ("playlist-pos", "pause", "idle-active")
+OBSERVED = ("playlist-pos", "pause", "idle-active", "core-idle")
 
 
 def arguments(socket_path: str, extra=()) -> list[str]:

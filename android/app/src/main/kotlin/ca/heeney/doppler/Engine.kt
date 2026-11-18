@@ -154,6 +154,9 @@ class Engine private constructor(private val context: Context) {
     private var listen = 0          // bumped each time a track starts over...
     private var counted = -1        // ...and set to it once that listen has been counted
     private var listenTrack: String? = null
+    private val listening = Listening(store)
+    /** The months as the hub last told them, newest first (kept for when the phone is off Wi-Fi). */
+    var months: List<MonthHeard> = monthsFrom(store.loadJson("listening-hub.json")); private set
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state
@@ -184,6 +187,7 @@ class Engine private constructor(private val context: Context) {
         exo.shuffleModeEnabled = false
         exo.addListener(object : Player.Listener {
             override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
+                listening.tally(if (player.isPlaying) item?.mediaId else null)
                 // Moving on by itself means the last track played to its end.
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) checkPlay(ended = true)
                 if (item?.mediaId != listenTrack || reason != Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) listen++
@@ -197,6 +201,7 @@ class Engine private constructor(private val context: Context) {
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                listening.tally(if (isPlaying) player.currentMediaItem?.mediaId else null)
                 if (isPlaying) {
                     // Sound is coming out: whatever went wrong before is over.
                     failures = 0
@@ -544,6 +549,7 @@ class Engine private constructor(private val context: Context) {
                 while (isActive && playing) {
                     delay(HEARTBEAT_MS)
                     if (playing) {
+                        listening.tally(if (player.isPlaying) player.currentMediaItem?.mediaId else null)
                         checkPlay()
                         if (Net.free || SystemClock.elapsedRealtime() - lastReport >= HEARTBEAT_MOBILE_MS) report()
                     }
@@ -939,18 +945,36 @@ class Engine private constructor(private val context: Context) {
         hubPlays[id] = Play((hubPlays[id]?.count ?: 0) + 1, now)
         store.savePlays("plays.json", plays)
         store.savePlays("plays-out.json", playsOut)
+        listening.credit(id, plays = 1)
         playsRev++
         wake.trySend(Unit)
     }
 
-    /** Send this phone's running totals; they're absolute, so a resend is harmless. */
+    /** Month by month, fresh from the hub when on Wi-Fi, otherwise as it last said. */
+    suspend fun loadMonths(): List<MonthHeard> {
+        val o = withContext(Dispatchers.IO) { runCatching { hub.json("GET", "/api/listening", timeoutMs = 15_000) }.getOrNull() }
+        if (o != null && o.has("months")) {
+            store.saveJson("listening-hub.json", o)
+            months = monthsFrom(o)
+        }
+        return months
+    }
+
+    private fun monthsFrom(o: JSONObject?): List<MonthHeard> =
+        o?.optJSONArray("months")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(MonthHeard::from) } } ?: emptyList()
+
+    /** Send this phone's running totals, and its listening time; they're absolute, so a resend is harmless. */
     private suspend fun sendPlays(): Boolean {
         val sending = HashMap(playsOut)
+        val listened = if (listening.waiting()) listening.sending() else null
         val reply = withContext(Dispatchers.IO) {
             runCatching {
-                hub.json("POST", "/api/plays", JSONObject().put("source", store.source).put("plays", playsJson(sending)))
+                val body = JSONObject().put("source", store.source).put("plays", playsJson(sending))
+                listened?.let { body.put("listened", it) }
+                hub.json("POST", "/api/plays", body)
             }.getOrNull()
         } ?: return false
+        listened?.let { listening.sent(it) }
         for ((k, v) in sending) if (playsOut[k] == v) playsOut.remove(k)
         store.savePlays("plays-out.json", playsOut)
         if (Core.mergePlays(hubPlays, playsFrom(reply.optJSONObject("plays")))) {
@@ -982,7 +1006,7 @@ class Engine private constructor(private val context: Context) {
     private suspend fun sender() {
         while (true) {
             // play counts aren't progress, so they wait for Wi-Fi
-            val plays = playsOut.isNotEmpty() && hub.base.isNotBlank() && Net.free
+            val plays = (playsOut.isNotEmpty() || listening.due(playing)) && hub.base.isNotBlank() && Net.free
             if (outbox.isEmpty() && !plays) wake.receive()
             if (plays && !sendPlays()) {
                 offline()

@@ -20,6 +20,7 @@ HELP = """doppler: two playlists, one keypress, the same place on every device
   doppler next | prev      skip
   doppler play NAME        play a folder, artist, album or playlist you made, by name
   doppler status           what's playing, here and elsewhere
+  doppler listening        how much you listened each month (add 2026-11 for one month)
   doppler ui               open the window
   doppler connect URL      point this computer's player at a hub
   doppler daemon           run the player (the installer sets this up as a service)
@@ -86,6 +87,36 @@ def status():
         print(state["message"])
 
 
+def hours(seconds: float) -> str:
+    minutes = int(seconds or 0) // 60
+    return f"{minutes // 60} h {minutes % 60:02d} m" if minutes >= 60 else f"{minutes} m"
+
+
+def month_name(month: str) -> str:
+    return time.strftime("%B %Y", time.strptime(month, "%Y-%m"))
+
+
+def listening(month: str | None = None):
+    reply = ask("/listening")
+    months = reply.get("months") or []
+    if not months:
+        print("Nothing heard yet")
+        return
+    if reply.get("local"):
+        print("hub unreachable: this computer's own listening only\n")
+    width = max(len(month_name(m["month"])) for m in months[:12])
+    for m in months[:12]:
+        print(f"{month_name(m['month']):<{width}}  {hours(m['seconds']):>10}  {m['plays']} plays")
+    pick = next((m for m in months if m["month"] == month), None) if month else months[0]
+    if month and not pick:
+        sys.exit(f"doppler: nothing heard in {month}")
+    print(f"\n{month_name(pick['month'])}: {hours(pick['seconds'])}, {pick['songs']} different songs")
+    if pick["artists"]:
+        print("  artists: " + ", ".join(f"{name} ({hours(s)})" for name, s in pick["artists"]))
+    for t in pick["top"]:
+        print(f"  {hours(t['seconds']):>10}  {t['artist'] + ' - ' if t['artist'] else ''}{t['title']}")
+
+
 def play_named(name: str):
     state = ask("/state")
     wanted = name.casefold()
@@ -137,6 +168,8 @@ def main(argv=None):
         play_named(" ".join(rest))
     elif command == "status":
         status()
+    elif command in ("listening", "stats"):
+        listening(rest[0] if rest else None)
     elif command == "ui":
         open_ui()
     elif command == "version":

@@ -22,6 +22,7 @@ from . import __version__, core
 from .mpv import Mpv
 
 HEARTBEAT = 15.0          # seconds between position reports while playing
+LISTENED_EVERY = 300.0    # listening time goes to the hub at least this often while playing
 MPV_LINGER = 20 * 60.0    # a paused mpv is shut down after this long; the spot is kept
 DEFAULT_PORT = 4636
 
@@ -124,9 +125,16 @@ class Player:
         self.listen = 0                        # bumped each time a track starts over...
         self.counted = -1                      # ...and set to it once that listen has been counted
         self._plays_out: dict[str, list] = {}
+        self.listened: dict[str, dict] = {}    # this install's own time heard: {month: {track: [seconds, plays]}}
+        self._listened_out: dict[str, dict] = {}
+        self._listened_sent = 0.0
+        self.core_idle = True                  # mpv's word for "no sound coming out" (paused, loading, buffering)
+        self._heard: tuple[str, float] | None = None  # the track sounding since then, by the monotonic clock
         self._load_saved()
         self.source = self._source()
         self._plays_out.update({t: list(v) for t, v in self.plays.items()})
+        self._prune_listened()
+        core.merge_listening(self._listened_out, self.listened)
 
     # --- small things
 
@@ -158,6 +166,7 @@ class Player:
             self.hub_state = saved.get("hub_state")
             self.plays = saved.get("plays", {})
             self.hub_plays = saved.get("hub_plays", {})
+            self.listened = saved.get("listened", {})
             last = saved.get("current")
             if last in self.sessions:
                 self.current = last
@@ -171,7 +180,7 @@ class Player:
         with open(tmp, "w") as handle:
             json.dump({"sessions": self.sessions, "library": self.library, "library_rev": self.library_rev,
                        "hub_state": self.hub_state, "current": self.current,
-                       "plays": self.plays, "hub_plays": self.hub_plays}, handle)
+                       "plays": self.plays, "hub_plays": self.hub_plays, "listened": self.listened}, handle)
         os.replace(tmp, os.path.join(self.state_dir, "player.json"))
 
     def bump(self):
@@ -250,6 +259,7 @@ class Player:
 
     def _report(self, claim: bool = False):
         """Note where we are, and queue it for the hub."""
+        self._tally()
         if not self.current:
             return
         position = self.position()
@@ -279,13 +289,25 @@ class Player:
                 playlist, item = next(iter(self._outbox.items())) if self._outbox else (None, None)
                 if playlist is not None:
                     del self._outbox[playlist]
-            if plays:
+                # Time heard rides along with plays and pauses, and every few minutes in between.
+                listened = {}
+                if self._listened_out and (plays or not self.playing
+                                           or time.monotonic() - self._listened_sent >= LISTENED_EVERY):
+                    listened, self._listened_out = self._listened_out, {}
+            if plays or listened:
                 try:
-                    reply = self.hub.request("POST", "/api/plays", {"source": self.source, "plays": plays})
-                    self.events.put(("plays", (reply.get("plays") or {}, False)))
+                    body = {"source": self.source, "plays": plays}
+                    if listened:
+                        body["listened"] = listened
+                    reply = self.hub.request("POST", "/api/plays", body)
+                    if listened:
+                        self._listened_sent = time.monotonic()
+                    if plays:
+                        self.events.put(("plays", (reply.get("plays") or {}, False)))
                 except OSError:
                     with self._outbox_ready:
                         core.merge_plays(self._plays_out, plays)
+                        core.merge_listening(self._listened_out, listened)
             if playlist is None:
                 if plays and self._plays_out:  # couldn't send them: wait a little before trying again
                     self.events.put(("hub-offline", None))
@@ -362,9 +384,65 @@ class Player:
         self._save()
         self.bump()
 
+    # --- listening time
+
+    def _sounding(self) -> str | None:
+        """The track that can be heard right now, if any."""
+        if self.playing and not self.core_idle and self.current and 0 <= self.index < len(self.order):
+            return self.order[self.index]
+        return None
+
+    def _tally(self):
+        """Credit the time since the last look to the track that was sounding then, and look again.
+        Called before and after anything that changes the track or stops the sound."""
+        now = time.monotonic()
+        if self._heard:
+            track, since = self._heard
+            if 0 < now - since < 3600:  # longer means the machine slept in between
+                self._credit(track, now - since)
+        track = self._sounding()
+        self._heard = (track, now) if track else None
+
+    def _credit(self, track: str, seconds: float = 0.0, plays: int = 0):
+        month = time.strftime("%Y-%m")
+        if month not in self.listened:
+            self._prune_listened()
+        core.add_listening(self.listened, month, track, seconds, plays)
+        if self.hub.base:
+            with self._outbox_ready:
+                self._listened_out.setdefault(month, {})[track] = list(self.listened[month][track])
+
+    def _prune_listened(self):
+        """Keep this month and last; the hub has the rest (or anything still waiting goes first)."""
+        year, month = map(int, time.strftime("%Y %m").split())
+        keep = {f"{year:04d}-{month:02d}", f"{year - (month == 1):04d}-{(month - 2) % 12 + 1:02d}"}
+        with self._outbox_ready:
+            keep.update(self._listened_out)
+        self.listened = {m: t for m, t in self.listened.items() if m in keep}
+
+    def listening_view(self) -> dict:
+        """Month by month, from the hub, or from this install's own count when the hub can't be reached.
+        Called from the API's thread, so the hub's slowness never holds up the player."""
+        reply = None
+        if self.hub.base:
+            try:
+                reply = self.hub.get("/api/listening", timeout=10)
+            except OSError:
+                pass
+        return self.call(self._listening_named, reply)
+
+    def _listening_named(self, reply: dict | None) -> dict:
+        """The top songs with their titles, for the window and the command."""
+        if reply is None:
+            reply = {"months": core.listening_months({"here": self.listened}, self.library), "local": True}
+        for month in reply.get("months", []):
+            month["top"] = [dict(self._track_view(t), seconds=s, plays=p) for t, s, p in month.get("top", [])]
+        return reply
+
     def _check_play(self, ended: bool = False):
         """Count the track that's on as played, once per listen, when enough of it has been heard
         (or it played to its end)."""
+        self._tally()
         if not self.current or self.counted == self.listen or not 0 <= self.index < len(self.order):
             return
         track = self.order[self.index]
@@ -376,6 +454,7 @@ class Player:
         self.plays[track] = [mine[0] + 1, now]
         theirs = self.hub_plays.get(track) or [0, 0.0]
         self.hub_plays[track] = [theirs[0] + 1, now]
+        self._credit(track, plays=1)
         self.plays_rev += 1
         if self.hub.base:
             with self._outbox_ready:
@@ -385,7 +464,9 @@ class Player:
 
     def _yield_to(self, device: str):
         """Another device has started playing: stop here, quietly, and leave its session alone."""
+        self._tally()
         self.playing = False
+        self._heard = None
         self.paused_at = time.monotonic()
         try:
             self.mpv.set("pause", True)
@@ -625,6 +706,9 @@ class Player:
     def _on_mpv(self, event: dict):
         name = event.get("event")
         if name == "doppler-mpv-gone":
+            self._tally()
+            self.core_idle = True
+            self._heard = None
             self.target = None
             if self.playing:
                 # mpv died under us (crashed, or killed): say so, and tell the hub the music stopped here
@@ -661,6 +745,10 @@ class Player:
                     if self.target is None:
                         self.target = 0.0
                     self._report()
+            elif prop == "core-idle" and isinstance(value, bool):
+                self._tally()
+                self.core_idle = value
+                self._tally()
             elif prop == "pause" and self.current and isinstance(value, bool):
                 if (not value) != self.playing and self.started:
                     self.playing = not value
@@ -874,6 +962,8 @@ class Api(BaseHTTPRequestHandler):
             return self._json(player.call(player.view))
         if url.path == "/recent":
             return self._json(player.call(player.recent_view))
+        if url.path == "/listening":
+            return self._json(player.listening_view())
         if url.path == "/tracks":
             return self._json(player.call(player.tracks_view, unquote(query.get("playlist", "f:"))))
         self._json({"error": "not found"}, 404)

@@ -63,12 +63,15 @@ doppler toggle             pause or resume whatever was last playing
 doppler next | prev        skip
 doppler play NAME          play any playlist, artist or album by name
 doppler status             what's playing, where
+doppler listening [MONTH]  how much you listened each month (MONTH like 2026-11)
 doppler ui                 open the window
 ```
 
 In the window, `1` and `2` play, Space pauses, the arrow keys skip, Ctrl+F searches (inside a playlist when one is open) and Esc closes it.
 
 A song counts as played once you've heard half of it, or four minutes of a long one. Plays from every device add up, and they're counted offline too.
+
+**Listening** shows how much you listened each month, on every device together: the month's hours, the last twelve months side by side (tap or click one to see it), and the artists and songs you heard most. Only time with sound coming out counts, not paused or buffering. It's at the top of **Recent** on the phone, behind **Listening** in the window, and `doppler listening` prints it.
 
 ### Per-playlist EQ (optional)
 

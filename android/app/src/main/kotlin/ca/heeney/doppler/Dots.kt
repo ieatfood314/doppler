@@ -17,13 +17,22 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.PI
 import kotlin.math.sin
 
-/** The 1 and the 2 as stars on a 5 by 7 grid. tools/make_art.py and desktop/Main.qml draw the same grid. */
+/** The 1 and the 2 (and the other digits, for the hours on Listening) as stars on a 5 by 7 grid.
+ * tools/make_art.py and desktop/Main.qml draw the same grid. */
 object Dots {
     const val COLS = 5
     const val ROWS = 7
     private val glyphs = mapOf(
+        "0" to listOf(".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
         "1" to listOf("..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."),
         "2" to listOf(".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"),
+        "3" to listOf(".###.", "#...#", "....#", "..##.", "....#", "#...#", ".###."),
+        "4" to listOf("...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."),
+        "5" to listOf("#####", "#....", "#....", "####.", "....#", "#...#", ".###."),
+        "6" to listOf("..###", ".#...", "#....", "####.", "#...#", "#...#", ".###."),
+        "7" to listOf("#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..."),
+        "8" to listOf(".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."),
+        "9" to listOf(".###.", "#...#", "#...#", ".####", "....#", "...#.", ".##.."),
     )
 
     fun on(digit: String, col: Int, row: Int) = glyphs[digit]?.get(row)?.get(col) == '#'

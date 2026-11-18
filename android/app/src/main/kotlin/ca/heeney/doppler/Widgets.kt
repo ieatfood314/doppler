@@ -31,7 +31,7 @@ import java.net.URL
 import java.util.concurrent.Executors
 
 /** The 2x1, 1x2 and 2x2 widgets. Stopped, they show the 1 and the 2, and a tap plays that one; the 2x2 also
- * shows today's screen time from lightcurve above them. While the phone plays they show the cover, title and
+ * shows today's screen time from ignition above them. While the phone plays they show the cover, title and
  * artist with the playing number small and red in the corner: a tap in the middle pauses, the left and right
  * edges go back and skip, and the number opens its playlist. Pausing, from anywhere, brings back the 1 and 2.
  * (A widget only gets taps: the launcher keeps swipes and press-and-hold.) Colours come from resources, so
@@ -133,7 +133,7 @@ object Widgets {
     private val DIGITS = intArrayOf(R.drawable.dots_0, R.drawable.dots_1, R.drawable.dots_2, R.drawable.dots_3, R.drawable.dots_4,
         R.drawable.dots_5, R.drawable.dots_6, R.drawable.dots_7, R.drawable.dots_8, R.drawable.dots_9)
 
-    /** "2H 49M", "49M", "3H", in stars; nothing at all while lightcurve hasn't said anything about today. */
+    /** "2H 49M", "49M", "3H", in stars; nothing at all while ignition hasn't said anything about today. */
     private fun showTime(context: Context, views: RemoteViews) {
         ScreenTime.open(context)?.let {
             views.setOnClickPendingIntent(R.id.time, PendingIntent.getActivity(context, 20, it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), FLAGS))

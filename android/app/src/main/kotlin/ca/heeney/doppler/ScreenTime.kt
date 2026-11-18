@@ -6,18 +6,19 @@ import android.content.Intent
 import java.time.LocalDate
 import java.time.LocalDateTime
 
-/** Today's screen time for the square widget, as lightcurve counts it: every screen, two at once counted once.
- * lightcurve's phone app sends it after each of its syncs (every 15 minutes, and whenever it's asked). */
+/** Today's screen time for the square widget, as ignition counts it: every screen, two at once counted once.
+ * ignition's phone app sends it after each time it sends its own screen time (every few minutes, and whenever
+ * it's asked). */
 object ScreenTime {
-    const val LIGHTCURVE = "ca.heeney.lightcurve"
-    /** lightcurve -> doppler: extras "lit" (seconds, Long) and "date" (yyyy-mm-dd, lightcurve's day). */
-    const val TODAY = "ca.heeney.lightcurve.TODAY"
-    /** doppler -> lightcurve: sync now and send TODAY. */
-    private const val REFRESH = "ca.heeney.lightcurve.REFRESH"
+    const val IGNITION = "ca.heeney.ignition"
+    /** ignition -> doppler: extras "lit" (seconds, Long) and "date" (yyyy-mm-dd, ignition's day). */
+    const val TODAY = "ca.heeney.ignition.TODAY"
+    /** doppler -> ignition: send now, then TODAY. */
+    private const val REFRESH = "ca.heeney.ignition.REFRESH"
 
     private const val PREFS = "screen_time"
 
-    /** Seconds lit today, or null when lightcurve hasn't said anything about today. */
+    /** Seconds lit today, or null when ignition hasn't said anything about today. */
     fun today(context: Context): Long? {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         if (prefs.getString("date", null) != day().toString()) return null
@@ -29,21 +30,21 @@ object ScreenTime {
             .putLong("heard", System.currentTimeMillis()).apply()
     }
 
-    /** lightcurve's day runs from 04:00 to 04:00. */
+    /** ignition's screen-time day runs from 04:00 to 04:00. */
     private fun day(): LocalDate = LocalDateTime.now().minusHours(4).toLocalDate()
 
-    /** Asks lightcurve for a fresh number, unless it was asked or answered in the last minute.
+    /** Asks ignition for a fresh number, unless it was asked or answered in the last minute.
      * Nothing happens if it isn't installed. */
     fun ask(context: Context) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         if (listOf("heard", "asked").any { now - prefs.getLong(it, 0) in 0 until 60_000 }) return
         prefs.edit().putLong("asked", now).apply()
-        runCatching { context.sendBroadcast(Intent(REFRESH).setPackage(LIGHTCURVE)) }
+        runCatching { context.sendBroadcast(Intent(REFRESH).setPackage(IGNITION)) }
     }
 
-    /** lightcurve's own screen, for a tap on the time. */
-    fun open(context: Context): Intent? = context.packageManager.getLaunchIntentForPackage(LIGHTCURVE)
+    /** ignition's Screen page, for a tap on the time. */
+    fun open(context: Context): Intent? = context.packageManager.getLaunchIntentForPackage(IGNITION)?.putExtra("page", "screen")
 }
 
 class ScreenTimeReceiver : BroadcastReceiver() {

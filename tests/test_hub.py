@@ -186,6 +186,64 @@ class Playlists(unittest.TestCase):
         self.assertFalse(self.hub.set_mode({"playlist": "f:Album", "mode": "sideways"})["ok"])
 
 
+class DeleteTracks(unittest.TestCase):
+    def setUp(self):
+        import os
+        from doppler.library import Library
+        self.dir = tempfile.TemporaryDirectory()
+        self.music = os.path.join(self.dir.name, "music")
+        os.makedirs(os.path.join(self.music, "1"))
+        for name in ("a.mp3", "b.mp3"):
+            open(os.path.join(self.music, "1", name), "wb").close()
+        self.library = Library(self.music, os.path.join(self.dir.name, "cache"))
+        self.library.scan(force=True)
+        self.hub = Hub(os.path.join(self.dir.name, "data"), self.library)
+        self.hub.use_gio = False
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_a_deleted_song_goes_to_the_trash_and_out_of_playlists(self):
+        import os
+        made = self.hub.put_playlist(None, {"name": "Mix", "tracks": ["1/a.mp3", "1/b.mp3"]})["playlist"]
+        rev, lib = self.hub.public()["rev"], self.library.rev
+        reply = self.hub.delete_tracks({"tracks": ["1/a.mp3"]})
+        self.assertTrue(reply["ok"])
+        self.assertEqual(reply["deleted"], ["1/a.mp3"])
+        self.assertFalse(os.path.exists(os.path.join(self.music, "1", "a.mp3")))
+        trashed = [f for _, _, files in os.walk(self.hub.trash_dir) for f in files]
+        self.assertEqual(trashed, ["a.mp3"])
+        self.assertEqual(self.library.ids(), ["1/b.mp3"])
+        self.assertNotEqual(self.library.rev, lib, "devices must fetch the library again")
+        self.assertGreater(self.hub.public()["rev"], rev)
+        self.assertEqual(self.hub.state["playlists"][made["id"]]["tracks"], ["1/b.mp3"])
+
+    def test_two_songs_with_the_same_file_name_both_keep_their_copy_in_the_trash(self):
+        import os
+        os.makedirs(os.path.join(self.music, "2"))
+        with open(os.path.join(self.music, "2", "a.mp3"), "wb") as handle:
+            handle.write(b"two")
+        self.library.scan(force=True)
+        self.assertTrue(self.hub.delete_tracks({"tracks": ["1/a.mp3", "2/a.mp3"]})["ok"])
+        sizes = sorted(os.path.getsize(os.path.join(base, f)) for base, _, files in os.walk(self.hub.trash_dir) for f in files)
+        self.assertEqual(sizes, [0, 3])
+
+    def test_only_songs_in_the_library(self):
+        import os
+        open(os.path.join(self.music, "1", "cover.jpg"), "wb").close()
+        self.assertFalse(self.hub.delete_tracks({"tracks": ["1/cover.jpg", "1/./b.mp3"]})["ok"])
+        self.assertTrue(os.path.exists(os.path.join(self.music, "1", "cover.jpg")))
+        self.assertTrue(os.path.exists(os.path.join(self.music, "1", "b.mp3")))
+
+    def test_nothing_outside_the_library(self):
+        import os
+        outside = os.path.join(self.dir.name, "secret.mp3")
+        open(outside, "wb").close()
+        self.assertFalse(self.hub.delete_tracks({"tracks": ["../secret.mp3"]})["ok"])
+        self.assertTrue(os.path.exists(outside))
+        self.assertFalse(self.hub.delete_tracks({"tracks": []})["ok"])
+
+
 class Plays(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()

@@ -776,7 +776,7 @@ class Player:
             where = None
             if session:
                 track = session.get("track") or (session["order"][session["index"]] if session.get("order") else None)
-                where = {"device": session["device"], "playing": session["playing"],
+                where = {"device": session["device"], "playing": session["playing"], "updated": session.get("updated", 0),
                          "index": session["index"], "track": self._track_view(track)}
             out.append({"id": playlist, "kind": kind, "name": core.playlist_name(playlist, custom),
                         "path": playlist[2:] if kind == "folder" else "", "count": count,
@@ -808,6 +808,21 @@ class Player:
         for track in self.tracks_of(playlist):
             view = self._track_view(track)
             view["plays"], view["last"] = self._plays_of(track)
+            out.append(view)
+        return out
+
+    def recent_view(self, limit: int = 60) -> list:
+        """The songs played last, newest first, with the folder each one plays from."""
+        played = []
+        for track in self.library:
+            count, last = self._plays_of(track)
+            if last:
+                played.append((last, track, count))
+        played.sort(reverse=True)
+        out = []
+        for last, track, count in played[:limit]:
+            view = self._track_view(track)
+            view["plays"], view["last"] = count, last
             out.append(view)
         return out
 
@@ -857,6 +872,8 @@ class Api(BaseHTTPRequestHandler):
                         break
                     player.ui_changed.wait(left)
             return self._json(player.call(player.view))
+        if url.path == "/recent":
+            return self._json(player.call(player.recent_view))
         if url.path == "/tracks":
             return self._json(player.call(player.tracks_view, unquote(query.get("playlist", "f:"))))
         self._json({"error": "not found"}, 404)

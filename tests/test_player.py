@@ -34,6 +34,13 @@ class Counting(unittest.TestCase):
         p._check_play()
         self.assertEqual(self.plays(), 2)
 
+    def test_recent_is_newest_first_and_skips_unplayed(self):
+        p = self.player
+        p.library["1/c.flac"] = {"id": "1/c.flac", "title": "c", "duration": 200}
+        p.hub_plays = {"1/a.flac": [3, 100.0], "1/b.flac": [1, 300.0]}
+        self.assertEqual([t["id"] for t in p.recent_view()], ["1/b.flac", "1/a.flac"])
+        self.assertEqual(p.recent_view()[1]["plays"], 3)
+
     def test_playing_to_the_end_counts_even_if_never_checked_midway(self):
         self.player.target = 0.0
         self.player._check_play(ended=True)

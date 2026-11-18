@@ -231,6 +231,20 @@ class Library:
         finally:
             self.scan_lock.release()
 
+    def forget(self, track_ids):
+        """Drops tracks whose files are gone, without waiting for the next scan. It waits for a scan
+        that's under way, which may have seen the files before they went."""
+        with self.scan_lock:
+            with self.lock:
+                for track_id in track_ids:
+                    self.tracks.pop(track_id, None)
+                self._set_rev()
+                tracks = dict(self.tracks)
+            tmp = self._cache_path + ".tmp"
+            with open(tmp, "w") as handle:
+                json.dump({"root": self.root, "tracks": tracks}, handle)
+            os.replace(tmp, self._cache_path)
+
     def ids(self):
         with self.lock:
             return list(self.tracks)

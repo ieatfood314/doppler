@@ -45,11 +45,15 @@ Leave out `--root` to stream everything from the hub. Then bind two shortcuts in
 
 ### An Android phone
 
-Install the APK from the [latest release](https://github.com/ieatfood314/doppler/releases/latest), or add this repository to [Obtainium](https://obtainium.imranr.dev). Open **All music**, then **Settings**, give it the hub's address and a name for the phone, and optionally let it use the music already on the phone.
+Install the APK from the [latest release](https://github.com/ieatfood314/doppler/releases/latest), or add this repository to [Obtainium](https://obtainium.imranr.dev). Tap the cog in the top corner, give it the hub's address and a name for the phone, and optionally let it use the music already on the phone.
 
 ## Using it
 
-On the phone, tap a big numeral to play or pause it, and long-press it to open that playlist (find or pick a track, see what's up next, sort it by title, artist, album or how often and how recently you've played each song, change its order, reshuffle, or put another playlist on the slot). Tap the song that's playing to open its playlist. **All music** opens the whole library, with search that finds artists and albums as well as songs, and **Artists** and **Albums** list them all, each with its own search. In the window, the search on the Artists or Albums tab looks through that list alone. To make a playlist, long-press tracks to select them, then **Add to playlist**.
+On the phone, tap a big numeral to play or pause it, and tap the name beside it (or long-press anywhere on it) to open that playlist: find or pick a track, see what's up next, sort it by title, artist, album or how often and how recently you've played each song, change its order, reshuffle, or put another playlist on the slot. Tap the song that's playing to open its playlist. **All music** opens the whole library, with search that finds artists and albums as well as songs, and **Artists** and **Albums** list them all, each with its own search. **Recent** shows the playlists and songs you played last.
+
+Every song has a **⋯** button: add it to a playlist, take it out of the one it's in, go to its artist or album, or delete it from the library. Deleting moves the file to the hub's trash (empty that to get the space back, or restore it from there), and if the music folder is shared with Syncthing the copies on your other devices go too. To do several at once, long-press songs to pick them.
+
+In the window it's the same: click a numeral to play, its name to open the playlist, and **All music** or **Recent** at the bottom to open the side panel (the × in its corner or Esc closes it). Right-click a song, or use its **⋯**, for the same menu as on the phone. The search on the Artists or Albums tab looks through that list alone.
 
 On a computer:
 

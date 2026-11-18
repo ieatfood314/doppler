@@ -54,6 +54,8 @@ data class Elsewhere(val device: String, val playlist: String, val name: String,
 data class PlaylistView(
     val id: String, val name: String, val path: String, val kind: String, val count: Int, val slot: String,
     val mode: String, val lastTrack: Track?, val lastDevice: String?, val lastPlaying: Boolean, val by: String = "",
+    /** When anyone last played it (hub seconds), 0 if never. */
+    val updated: Double = 0.0,
 ) {
     val custom get() = kind == "custom"
 }
@@ -603,6 +605,10 @@ class Engine private constructor(private val context: Context) {
     /** Everyone's count, or this phone's own when the hub hasn't heard it yet. */
     fun playsOf(id: String): Play = maxOf(hubPlays[id] ?: Play.NONE, plays[id] ?: Play.NONE)
 
+    /** The songs heard last, newest first. */
+    fun recent(limit: Int = 60): List<Track> = library.keys.map { it to playsOf(it).last }.filter { it.second > 0 }
+        .sortedByDescending { it.second }.take(limit).mapNotNull { track(it.first) }
+
     fun position(): Long = if (current != null && player.mediaItemCount > 0) player.currentPosition else
         ((sessions[current ?: ""]?.position ?: 0.0) * 1000).toLong()
 
@@ -621,28 +627,29 @@ class Engine private constructor(private val context: Context) {
         val remote = hubState?.sessions ?: emptyMap()
         val views = ArrayList<PlaylistView>()
         val folderMap = Core.folders(library.keys)
-        fun last(id: String): Triple<String?, String?, Boolean> {
+        data class Last(val track: String?, val device: String?, val playing: Boolean, val updated: Double)
+        fun last(id: String): Last {
             val mine = sessions[id]
             val theirs = remote[id]
-            return if (mine != null && (mine.unsent || theirs == null || mine.updated >= theirs.updated)) Triple(mine.track, mine.device, mine.playing)
-            else if (theirs != null) Triple(theirs.track, theirs.device, theirs.playing) else Triple(null, null, false)
+            return if (mine != null && (mine.unsent || theirs == null || mine.updated >= theirs.updated)) Last(mine.track, mine.device, mine.playing, mine.updated)
+            else if (theirs != null) Last(theirs.track, theirs.device, theirs.playing, theirs.updated) else Last(null, null, false, 0.0)
         }
         for (id in folderMap.keys.sortedWith(compareBy(Core.natural) { it.substring(2) })) {
-            val (t, d, p) = last(id)
+            val (t, d, p, u) = last(id)
             views.add(PlaylistView(id, Core.playlistName(id, custom), id.substring(2), "folder", folderMap[id]!!.size, bySlot[id] ?: "",
-                modes()[id] ?: "shuffle", track(t), d, p))
+                modes()[id] ?: "shuffle", track(t), d, p, updated = u))
         }
         for ((id, c) in custom) {
-            val (t, d, p) = last(id)
-            views.add(PlaylistView(id, c.name, "", "custom", tracksOf(id).size, bySlot[id] ?: "", modes()[id] ?: "shuffle", track(t), d, p))
+            val (t, d, p, u) = last(id)
+            views.add(PlaylistView(id, c.name, "", "custom", tracksOf(id).size, bySlot[id] ?: "", modes()[id] ?: "shuffle", track(t), d, p, updated = u))
         }
         val (artists, albums) = tagged()
         for ((kind, found) in listOf("artist" to artists, "album" to albums)) {
             for (id in found.keys.sortedWith(compareBy(Core.natural) { it.substring(2) })) {
-                val (t, d, p) = last(id)
+                val (t, d, p, u) = last(id)
                 val by = if (kind == "album") Core.albumBy(id, found[id]!!, library) else ""
                 views.add(PlaylistView(id, Core.playlistName(id, custom), "", kind, found[id]!!.size, bySlot[id] ?: "",
-                    modes()[id] ?: "shuffle", track(t), d, p, by))
+                    modes()[id] ?: "shuffle", track(t), d, p, by, u))
             }
         }
         val active = hubState?.active
@@ -1037,6 +1044,22 @@ class Engine private constructor(private val context: Context) {
             }
             refresh()
             then(r)
+        }
+    }
+
+    /** Deletes songs from the library for good (the hub moves the files to its trash). A song that's
+     * playing here is skipped once it's gone, since its file can't be streamed any more. */
+    fun deleteTracks(ids: List<String>, then: () -> Unit = {}) {
+        if (ids.isEmpty()) return
+        hubEdit("POST", "/api/tracks/delete", JSONObject().put("tracks", JSONArray(ids))) { r ->
+            if (r != null) {
+                val deleted = r.optJSONArray("deleted")?.let { a -> List(a.length()) { a.getString(it) } } ?: emptyList()
+                if (playing && currentTrack() in deleted) next()
+                val n = deleted.size
+                say(r.optString("error").ifEmpty { if (n == 1) "Deleted ${track(ids[0])?.title ?: "1 song"}" else "Deleted $n songs" })
+                publish()
+            }
+            then()
         }
     }
 

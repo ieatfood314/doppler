@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -64,7 +65,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
@@ -93,6 +93,7 @@ import kotlin.random.Random
 private sealed interface Screen {
     data object Home : Screen
     data object Library : Screen
+    data object Recent : Screen
     data class Playlist(val id: String) : Screen
     data class Browse(val kind: String) : Screen
     data object Settings : Screen
@@ -118,7 +119,8 @@ fun App(engine: Engine, askFiles: () -> Unit, opening: String? = null, opened: (
             when (s) {
                 Screen.Home -> Home(engine, state, open = { stack.add(it) })
                 Screen.Library -> Library(engine, state, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
-                is Screen.Playlist -> PlaylistPage(engine, state, s.id, back = { stack.removeAt(stack.lastIndex) })
+                Screen.Recent -> RecentPage(engine, state, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
+                is Screen.Playlist -> PlaylistPage(engine, state, s.id, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
                 is Screen.Browse -> BrowsePage(state, s.kind, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
                 Screen.Settings -> SettingsPage(engine, state, askFiles, back = { stack.removeAt(stack.lastIndex) })
             }
@@ -173,7 +175,7 @@ fun Wavefronts(color: Color, towardRight: Boolean, modifier: Modifier) {
 @Composable
 private fun Home(engine: Engine, state: UiState, open: (Screen) -> Unit) {
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 22.dp)) {
-        TopLine(state)
+        TopLine(state) { open(Screen.Settings) }
         state.elsewhere?.takeIf { it.playing }?.let { Elsewhere(engine, state, it) }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val h = maxHeight
@@ -184,9 +186,10 @@ private fun Home(engine: Engine, state: UiState, open: (Screen) -> Unit) {
             if (h < 10.dp) Spacer(Modifier)
         }
         NowPlaying(engine, state, open)
-        Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("All music", Modifier.clip(RoundedCornerShape(12.dp)).clickable { open(Screen.Library) }.padding(vertical = 10.dp, horizontal = 2.dp),
-                color = Palette.Dust, size = 15, weight = FontWeight.Medium)
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Pill("All music") { open(Screen.Library) }
+            Pill("Recent") { open(Screen.Recent) }
             Spacer(Modifier.weight(1f))
             Text(state.output?.let { "To $it" } ?: if (state.onSpeaker) "Phone speaker" else "Connected",
                 color = if (state.onSpeaker) Palette.Faint else Palette.Dust, size = 13)
@@ -195,17 +198,18 @@ private fun Home(engine: Engine, state: UiState, open: (Screen) -> Unit) {
 }
 
 @Composable
-private fun TopLine(state: UiState) {
+private fun TopLine(state: UiState, settings: () -> Unit) {
     val line = when {
         state.message.isNotEmpty() -> state.message
-        state.hubUrl.isBlank() -> "Not synced: add your hub in All music, Settings"
+        state.hubUrl.isBlank() -> "Not synced: add your hub in Settings"
         !state.onWifi && state.mobileUsed >= Net.BUDGET -> "Mobile data used up. Syncs on Wi-Fi"
         !state.onWifi -> "Off Wi-Fi: songs on the phone only"
         !state.hubOnline -> "Offline. Picks up the sync when the hub is back"
         else -> ""
     }
-    Box(Modifier.fillMaxWidth().height(36.dp), contentAlignment = Alignment.CenterStart) {
-        if (line.isNotEmpty()) Text(line, color = Palette.Dust, size = 13, maxLines = 1)
+    Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(line, Modifier.weight(1f), color = Palette.Dust, size = 13, maxLines = 1)
+        Box(Modifier.offset(x = 10.dp)) { IconButton("Settings", settings) { c -> drawGear(c) } }
     }
 }
 
@@ -239,20 +243,31 @@ private fun SlotBlock(engine: Engine, state: UiState, slot: String, modifier: Mo
         if (lit) Wavefronts(color, towardRight = !right, Modifier.size((numeral * 1.25f).dp).align(if (right) Alignment.CenterEnd else Alignment.CenterStart))
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = if (right) Arrangement.End else Arrangement.Start) {
-            if (right) SlotWords(state, slot, view, lit, color, TextAlign.End, Modifier.weight(1f).padding(end = 6.dp))
+            val openIt = { id?.let { open(Screen.Playlist(it)) }; Unit }
+            if (right) SlotWords(state, slot, view, lit, color, TextAlign.End, Modifier.weight(1f).padding(end = 6.dp), openIt)
             DotNumeral(slot, (numeral * 0.78f).dp, if (lit) color else Palette.Starlight.copy(alpha = if (state.playing) 0.42f else 0.88f),
                 lit, animate = !reducedMotion(LocalContext.current), modifier = Modifier.padding(horizontal = 10.dp))
-            if (!right) SlotWords(state, slot, view, lit, color, TextAlign.Start, Modifier.weight(1f).padding(start = 6.dp))
+            if (!right) SlotWords(state, slot, view, lit, color, TextAlign.Start, Modifier.weight(1f).padding(start = 6.dp), openIt)
         }
     }
 }
 
 @Composable
-private fun SlotWords(state: UiState, slot: String, view: PlaylistView?, lit: Boolean, color: Color, align: TextAlign, modifier: Modifier) {
-    Column(modifier, horizontalAlignment = if (align == TextAlign.End) Alignment.End else Alignment.Start) {
-        Text(when { view == null -> "Not set"; view.name == slot -> "${view.count} tracks"; else -> view.name }, color = Palette.Starlight, size = 26, family = Type.Display, align = align, maxLines = 1)
+private fun SlotWords(state: UiState, slot: String, view: PlaylistView?, lit: Boolean, color: Color, align: TextAlign, modifier: Modifier,
+                      openIt: () -> Unit) {
+    // The numeral plays; the words open the playlist (and so does a long-press anywhere).
+    val end = align == TextAlign.End
+    Box(modifier, contentAlignment = if (end) Alignment.CenterEnd else Alignment.CenterStart) {
+    Column(Modifier.clip(RoundedCornerShape(14.dp)).clickable(enabled = view != null, onClick = openIt)
+        .semantics { contentDescription = "Open ${view?.name ?: slot}" }.padding(horizontal = 6.dp, vertical = 8.dp),
+        horizontalAlignment = if (end) Alignment.End else Alignment.Start) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(when { view == null -> "Not set"; view.name == slot -> "${view.count} tracks"; else -> view.name },
+                Modifier.weight(1f, fill = false), color = Palette.Starlight, size = 26, family = Type.Display, align = align, maxLines = 1)
+            if (view != null) Canvas(Modifier.padding(start = 8.dp, top = 3.dp).size(8.dp, 13.dp)) { drawChevron(Palette.Dust) }
+        }
         val note = when {
-            view == null -> "Long-press to choose"
+            view == null -> "Choose one in All music"
             lit -> "Playing"
             state.starting && state.pending == view.id -> "Starting"
             view.lastTrack == null -> "Shuffled, from the top"
@@ -262,6 +277,7 @@ private fun SlotWords(state: UiState, slot: String, view: PlaylistView?, lit: Bo
         }
         Text(note, color = if (lit) color else Palette.Dust, size = 13, align = align, maxLines = 1)
         view?.lastTrack?.takeIf { !lit }?.let { Text(it.title, color = Palette.Faint, size = 13, align = align, maxLines = 1) }
+    }
     }
 }
 
@@ -287,7 +303,7 @@ private fun NowPlaying(engine: Engine, state: UiState, open: (Screen) -> Unit) {
             Text(track.title, color = Palette.Starlight, size = 24, family = Type.Display, maxLines = 1)
             Text(listOf(track.artist, state.playlistName).filter { it.isNotEmpty() }.joinToString(", from "), color = Palette.Dust, size = 14, maxLines = 1)
         }
-        Spectrum(track.id, position, duration, color, Modifier.fillMaxWidth().height(40.dp).padding(top = 10.dp)) { engine.seek(it) }
+        SeekBar(position, duration, color, Modifier.fillMaxWidth().height(40.dp).padding(top = 10.dp)) { engine.seek(it) }
         Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(clock(position), color = Palette.Faint, size = 12)
             Spacer(Modifier.weight(1f))
@@ -307,17 +323,11 @@ fun clock(ms: Long): String {
     return "%d:%02d".format(s / 60, s % 60)
 }
 
-/** The progress line is a stellar spectrum, with dark absorption lines that are this track's own
- * fingerprint. Drag or tap anywhere on it to move. */
+/** Where the song is, in the playing key's colour. Drag or tap anywhere on it to move. */
 @Composable
-fun Spectrum(trackId: String, position: Long, duration: Long, accent: Color, modifier: Modifier, seek: (Long) -> Unit) {
-    val lines = remember(trackId) {
-        val r = Random(trackId.hashCode())
-        List(22) { r.nextFloat() to (0.25f + r.nextFloat() * 0.75f) }
-    }
+fun SeekBar(position: Long, duration: Long, accent: Color, modifier: Modifier, seek: (Long) -> Unit) {
     var dragging by remember { mutableStateOf<Float?>(null) }
     val fraction = dragging ?: if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
-    val spectrum = remember { listOf(Color(0xFF6B2BFF), Palette.Blue, Color(0xFF39D0E0), Color(0xFF7BE07A), Color(0xFFFFE15A), Color(0xFFFF9A3C), Palette.Red) }
     Canvas(modifier
         .pointerInput(duration) {
             detectTapGestures { o -> if (duration > 0) seek((o.x / size.width * duration).toLong()) }
@@ -331,18 +341,12 @@ fun Spectrum(trackId: String, position: Long, duration: Long, accent: Color, mod
         }
         .semantics { contentDescription = "Position ${clock(position)} of ${clock(duration)}" }) {
         val mid = size.height / 2
-        val band = 6.dp.toPx()
-        drawLine(Palette.Hairline, Offset(0f, mid), Offset(size.width, mid), 1.dp.toPx())
+        val band = 4.dp.toPx()
         val played = size.width * fraction
-        if (played > 0) {
-            drawRect(Brush.horizontalGradient(spectrum, 0f, size.width), Offset(0f, mid - band / 2), androidx.compose.ui.geometry.Size(played, band))
-            for ((x, strength) in lines) {
-                val lx = x * size.width
-                if (lx < played) drawLine(Color.Black.copy(alpha = strength), Offset(lx, mid - band / 2), Offset(lx, mid + band / 2), 1.6.dp.toPx())
-            }
-        }
-        drawCircle(accent.copy(alpha = 0.25f), 9.dp.toPx(), Offset(played, mid))
-        drawCircle(Palette.Starlight, 3.5.dp.toPx(), Offset(played, mid))
+        drawLine(Palette.Hairline, Offset(band / 2, mid), Offset(size.width - band / 2, mid), band, StrokeCap.Round)
+        if (played > 0) drawLine(accent, Offset(band / 2, mid), Offset(played.coerceAtLeast(band / 2), mid), band, StrokeCap.Round)
+        drawCircle(accent.copy(alpha = 0.22f), (if (dragging != null) 13 else 10).dp.toPx(), Offset(played, mid))
+        drawCircle(accent, 5.5.dp.toPx(), Offset(played, mid))
     }
 }
 
@@ -397,6 +401,7 @@ private fun Library(engine: Engine, state: UiState, open: (Screen) -> Unit, back
     }
     val artists = named.filter { it.kind == "artist" }.take(4)
     val albums = named.filter { it.kind == "album" }.take(6)
+    var acting by remember { mutableStateOf<Track?>(null) }
     LazyColumn(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().padding(horizontal = 22.dp)) {
         item { Header("All music", back) }
         item {
@@ -419,7 +424,7 @@ private fun Library(engine: Engine, state: UiState, open: (Screen) -> Unit, back
             items(matches, key = { "m" + it.id }) { t ->
                 TrackRow(engine, t, state.track?.id == t.id, selected = false, onClick = {
                     engine.requestPlay("f:" + t.id.substringBeforeLast("/", ""), t.id)
-                }, onLong = {})
+                }, onLong = {}, onMore = { acting = t })
             }
         } else {
             item { Section("Folders") }
@@ -442,6 +447,63 @@ private fun Library(engine: Engine, state: UiState, open: (Screen) -> Unit, back
         naming = false
         engine.hubEdit("POST", "/api/playlists", JSONObject().put("name", name).put("tracks", JSONArray())) { r ->
             r?.optJSONObject("playlist")?.optString("id")?.let { open(Screen.Playlist(it)) }
+        }
+    }
+    acting?.let { TrackMenu(engine, state, it, null, open) { acting = null } }
+}
+
+/** Playlists and songs played lately, newest first. The ones on a key are left out of the playlists:
+ * they're on the home screen already. */
+@Composable
+private fun RecentPage(engine: Engine, state: UiState, open: (Screen) -> Unit, back: () -> Unit) {
+    val lists = remember(state.playlists) { state.playlists.filter { it.updated > 0 && it.slot.isEmpty() }.sortedByDescending { it.updated }.take(6) }
+    val songs = remember(state.playsRev, state.libraryCount) { engine.recent() }
+    var acting by remember { mutableStateOf<Track?>(null) }
+    LazyColumn(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 22.dp)) {
+        item { Header("Recent", back) }
+        if (lists.isEmpty() && songs.isEmpty()) item {
+            Text("Nothing played yet", color = Palette.Dust, size = 15, modifier = Modifier.padding(vertical = 14.dp))
+        }
+        if (lists.isNotEmpty()) item { Section("Playlists") }
+        items(lists, key = { "p" + it.id }) { p -> PlaylistRow(p, state) { open(Screen.Playlist(p.id)) } }
+        if (songs.isNotEmpty()) item { Section("Songs") }
+        items(songs, key = { "s" + it.id }) { t ->
+            TrackRow(engine, t, state.track?.id == t.id, selected = false, note = ago(engine.playsOf(t.id).last),
+                onClick = { engine.requestPlay("f:" + t.id.substringBeforeLast("/", ""), t.id) }, onLong = {}, onMore = { acting = t })
+        }
+        item { Spacer(Modifier.height(40.dp)) }
+    }
+    acting?.let { TrackMenu(engine, state, it, null, open) { acting = null } }
+}
+
+/** Everything you can do to one song: add it to a playlist, take it out of this one, go to its
+ * artist or album, or delete it from the library. */
+@Composable
+private fun TrackMenu(engine: Engine, state: UiState, t: Track, playlist: String?, open: (Screen) -> Unit, dismiss: () -> Unit) {
+    var step by remember(t.id) { mutableStateOf("menu") }
+    val view = state.playlists.firstOrNull { it.id == playlist }
+    when (step) {
+        "add" -> AddDialog(engine, state, listOf(t.id), dismiss, dismiss)
+        "delete" -> Ask("Delete ${t.title}?", "The file goes to the hub's trash, and off every device.", "Delete", dismiss) {
+            engine.deleteTracks(listOf(t.id))
+            dismiss()
+        }
+        else -> Sheet(dismiss) {
+            Text(t.title, color = Palette.Starlight, size = 22, family = Type.Display, maxLines = 2)
+            val sub = listOf(t.artist, t.album).filter { it.isNotEmpty() }.joinToString(", ")
+            if (sub.isNotEmpty()) Text(sub, color = Palette.Dust, size = 14, maxLines = 1)
+            Spacer(Modifier.height(10.dp))
+            SheetItem("Add to playlist") { step = "add" }
+            if (view?.custom == true) SheetItem("Remove from ${view.name}") {
+                engine.hubEdit("PUT", "/api/playlists/${view.id}", JSONObject().put("remove", JSONArray(listOf(t.id))))
+                dismiss()
+            }
+            val artist = state.playlists.firstOrNull { it.kind == "artist" && it.name.equals(t.artist, true) && it.id != playlist }
+            val album = state.playlists.firstOrNull { it.kind == "album" && it.name.equals(t.album, true) && it.id != playlist &&
+                (it.by.isEmpty() || it.by.equals(t.albumArtist.ifEmpty { t.artist }, true)) }
+            artist?.let { a -> SheetItem("Go to ${a.name}") { dismiss(); open(Screen.Playlist(a.id)) } }
+            album?.let { a -> SheetItem("Go to the album") { dismiss(); open(Screen.Playlist(a.id)) } }
+            SheetItem("Delete from library", Palette.Red) { step = "delete" }
         }
     }
 }
@@ -503,7 +565,7 @@ private fun SlotBadge(slot: String) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () -> Unit) {
+private fun PlaylistPage(engine: Engine, state: UiState, id: String, open: (Screen) -> Unit, back: () -> Unit) {
     val view = state.playlists.firstOrNull { it.id == id }
     val tracks = remember(id, state.libraryCount, state.customs) { engine.tracksOf(id).map { engine.track(it)!! } }
     var find by rememberSaveable(id) { mutableStateOf("") }
@@ -520,6 +582,8 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
     var adding by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var deletingSongs by remember { mutableStateOf(false) }
+    var acting by remember { mutableStateOf<Track?>(null) }
     var searching by rememberSaveable(id) { mutableStateOf(find.isNotEmpty()) }
     var more by remember { mutableStateOf(false) }
     var picking by rememberSaveable(id) { mutableStateOf(false) }
@@ -580,7 +644,8 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
                 val picked = t.id in selected
                 TrackRow(engine, t, state.track?.id == t.id && state.playlist == id, picked, note = sortNote(engine, t, sorting),
                     onClick = { if (pickMode) { if (picked) selected.remove(t.id) else selected.add(t.id) } else engine.requestPlay(id, t.id) },
-                    onLong = { if (picked) selected.remove(t.id) else selected.add(t.id) })
+                    onLong = { if (picked) selected.remove(t.id) else selected.add(t.id) },
+                    onMore = if (pickMode) null else ({ acting = t }))
             }
             item { Spacer(Modifier.height(if (pickMode) 120.dp else 40.dp)) }
         }
@@ -597,6 +662,7 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
                         engine.hubEdit("PUT", "/api/playlists/$id", JSONObject().put("remove", JSONArray(selected.toList())))
                         selected.clear(); picking = false
                     }
+                    Pill("Delete", color = Palette.Red) { deletingSongs = true }
                     Pill("Add to playlist", true) { adding = true }
                 }
             }
@@ -629,6 +695,13 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, back: () ->
         }
     }
     if (adding) AddDialog(engine, state, selected.toList(), { adding = false }) { adding = false; selected.clear(); picking = false }
+    if (deletingSongs) Ask(if (selected.size == 1) "Delete 1 song?" else "Delete ${selected.size} songs?",
+        "The files go to the hub's trash, and off every device.", "Delete", { deletingSongs = false }) {
+        deletingSongs = false
+        engine.deleteTracks(selected.toList())
+        selected.clear(); picking = false
+    }
+    acting?.let { TrackMenu(engine, state, it, id, open) { acting = null } }
     if (renaming && view != null) NameDialog("Rename", view.name, "Rename", { renaming = false }) { name ->
         renaming = false
         engine.hubEdit("PUT", "/api/playlists/$id", JSONObject().put("name", name))
@@ -690,9 +763,10 @@ private fun ago(seconds: Double): String {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TrackRow(engine: Engine, t: Track, current: Boolean, selected: Boolean, note: String? = null, onClick: () -> Unit, onLong: () -> Unit) {
+private fun TrackRow(engine: Engine, t: Track, current: Boolean, selected: Boolean, note: String? = null, onClick: () -> Unit, onLong: () -> Unit,
+                     onMore: (() -> Unit)? = null) {
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(if (selected) Palette.Panel else Color.Transparent)
-        .combinedClickable(onClick = onClick, onLongClick = onLong).padding(vertical = 10.dp, horizontal = 4.dp),
+        .combinedClickable(onClick = onClick, onLongClick = onLong).padding(start = 4.dp, top = 2.dp, bottom = 2.dp, end = if (onMore != null) 0.dp else 4.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(18.dp), contentAlignment = Alignment.CenterStart) {
             if (current) Box(Modifier.size(7.dp).clip(CircleShape).background(Palette.Starlight))
@@ -706,6 +780,8 @@ private fun TrackRow(engine: Engine, t: Track, current: Boolean, selected: Boole
         if (!engine.isLocal(t.id)) Text("streams", color = Palette.Faint, size = 11, modifier = Modifier.padding(horizontal = 8.dp))
         if (note != null) Text(note, color = Palette.Faint, size = 12)
         else if (t.duration > 0) Text(clock((t.duration * 1000).toLong()), color = Palette.Faint, size = 12)
+        if (onMore != null) IconButton("More for ${t.title}", onMore, tint = Palette.Dust) { c -> drawMore(c) }
+        else Spacer(Modifier.height(44.dp))
     }
 }
 
@@ -865,9 +941,9 @@ private fun SearchField(value: String, change: (String) -> Unit, hint: String, c
 }
 
 @Composable
-private fun IconButton(label: String, onClick: () -> Unit, dot: Boolean = false, draw: DrawScope.(Color) -> Unit) {
+private fun IconButton(label: String, onClick: () -> Unit, dot: Boolean = false, tint: Color = Palette.Starlight, draw: DrawScope.(Color) -> Unit) {
     Box(Modifier.size(44.dp).clip(CircleShape).clickable(onClick = onClick).semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(18.dp)) { draw(Palette.Starlight) }
+        Canvas(Modifier.size(18.dp)) { draw(tint) }
         if (dot) Box(Modifier.align(Alignment.TopEnd).padding(top = 9.dp, end = 9.dp).size(5.dp).clip(CircleShape).background(Palette.Starlight))
     }
 }
@@ -890,6 +966,31 @@ private fun DrawScope.drawSort(c: Color) {
 
 private fun DrawScope.drawMore(c: Color) {
     for (i in 0..2) drawCircle(c, 1.7.dp.toPx(), Offset(size.width * (0.15f + i * 0.35f), size.height / 2))
+}
+
+private fun DrawScope.drawChevron(c: Color) {
+    val w = 1.6.dp.toPx()
+    drawPath(Path().apply { moveTo(w, w); lineTo(size.width - w, size.height / 2); lineTo(w, size.height - w) }, c,
+        style = Stroke(width = w, cap = StrokeCap.Round))
+}
+
+/** A cog: eight square teeth round a ring, with the hole in the middle. */
+private fun DrawScope.drawGear(c: Color) {
+    val w = 1.5.dp.toPx()
+    val o = Offset(size.width / 2, size.height / 2)
+    val outer = size.minDimension * 0.5f - w / 2
+    val inner = outer * 0.74f
+    val path = Path()
+    val steps = 32
+    for (k in 0..steps) {
+        val a = (k - 0.5) * 2 * Math.PI / steps
+        val r = if ((k / 2) % 2 == 0) outer else inner
+        val p = Offset(o.x + (r * kotlin.math.cos(a)).toFloat(), o.y + (r * kotlin.math.sin(a)).toFloat())
+        if (k == 0) path.moveTo(p.x, p.y) else path.lineTo(p.x, p.y)
+    }
+    path.close()
+    drawPath(path, c, style = Stroke(width = w, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+    drawCircle(c, outer * 0.3f, o, style = Stroke(w))
 }
 
 private fun DrawScope.drawClose(c: Color) {
@@ -941,7 +1042,7 @@ private fun Pill(label: String, strong: Boolean = false, color: Color = Palette.
     Text(label, Modifier.clip(RoundedCornerShape(50)).clickable(onClick = onClick)
         .then(if (strong) Modifier.background(color.copy(alpha = 0.14f)) else Modifier)
         .border(1.dp, if (strong) color.copy(alpha = 0.7f) else Palette.Hairline, RoundedCornerShape(50))
-        .padding(horizontal = 15.dp, vertical = 9.dp), color = if (strong) color else Palette.Starlight, size = 14, weight = FontWeight.Medium)
+        .padding(horizontal = 15.dp, vertical = 9.dp), color = color, size = 14, weight = FontWeight.Medium)
 }
 
 @Composable

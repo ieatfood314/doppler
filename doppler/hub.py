@@ -9,6 +9,8 @@ import json
 import mimetypes
 import os
 import secrets
+import shutil
+import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -46,6 +48,8 @@ class Hub:
             pass
         self._saved_at = 0.0
         self._dirty = False
+        self.trash_dir = os.path.join(data_dir, "trash")
+        self.use_gio = True
 
     # --- persistence
 
@@ -276,6 +280,57 @@ class Hub:
             self._save()
         return {"ok": True}
 
+    def delete_tracks(self, body: dict) -> dict:
+        """Takes songs out of the library for good: the files go to the hub's trash (so a slip can be
+        undone there), and out of every hand-made playlist. Syncthing, if it shares the folder,
+        then removes the copies on the other devices."""
+        tracks = body.get("tracks")
+        if not isinstance(tracks, list) or not tracks or not self.library:
+            return {"ok": False, "error": "tracks are required"}
+        asked = list(dict.fromkeys(str(t) for t in tracks))
+        known = set(self.library.ids())
+        wanted = [t for t in asked if t in known and self.library.path(t)]
+        gone = self.trash(wanted) if wanted else []
+        failed = len(asked) - len(gone)
+        if gone:
+            self.library.forget(gone)
+            dropped = set(gone)
+            with self.changed:
+                for entry in self.state["playlists"].values():
+                    entry["tracks"] = [t for t in entry["tracks"] if t not in dropped]
+                self._bump()
+                self._save()
+        out = {"ok": not failed, "deleted": gone}
+        if failed:
+            out["error"] = f"couldn't delete {failed} of them"
+        return out
+
+    def trash(self, tracks: list) -> list:
+        """Moves the tracks' files to the desktop's trash (`gio trash` uses the drive's own, so it's a
+        rename however big the files), or else to a folder of ours. Returns the ones that went."""
+        root = self.library.root
+        if self.use_gio and shutil.which("gio"):
+            try:
+                subprocess.run(["gio", "trash", "--", *(os.path.join(root, t) for t in tracks)], capture_output=True, timeout=60)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        gone = []
+        stamp = os.path.join(self.trash_dir, time.strftime("%Y-%m-%d %H%M%S"))
+        for track in tracks:
+            path = os.path.join(root, track)
+            if os.path.lexists(path):
+                # Kept under its own path, so two songs with the same file name don't overwrite each other.
+                dest = os.path.join(stamp, track)
+                try:
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    if os.path.lexists(dest):
+                        continue
+                    shutil.move(path, dest)
+                except OSError:
+                    continue
+            gone.append(track)
+        return gone
+
     def library_changed(self):
         with self.changed:
             self._bump()
@@ -440,6 +495,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.hub.put_playlist(None, body))
         if path == "/api/plays":
             return self._json(self.hub.add_plays(body))
+        if path == "/api/tracks/delete":
+            return self._json(self.hub.delete_tracks(body))
         if path == "/api/rescan":
             if self.hub.library.scan(force=True):
                 self.hub.library_changed()

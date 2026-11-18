@@ -108,7 +108,7 @@ class Listening(private val store: Store) {
             }
             if (waiting.length() == 0) out.remove(month)
         }
-        store.saveJson("listened-out.json", out)
+        save()   // the totals too: after a kill, a total behind what the hub has would count nothing until it caught up
     }
 
     private fun save() {

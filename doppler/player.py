@@ -133,8 +133,8 @@ class Player:
         self._load_saved()
         self.source = self._source()
         self._plays_out.update({t: list(v) for t, v in self.plays.items()})
+        core.merge_listening(self._listened_out, self.listened)  # queued first, so pruning keeps what's unsent
         self._prune_listened()
-        core.merge_listening(self._listened_out, self.listened)
 
     # --- small things
 

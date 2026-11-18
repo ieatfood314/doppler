@@ -178,6 +178,9 @@ class Plays(unittest.TestCase):
         self.assertEqual(hub["2026-11"]["a"], [150.0, 1], "an older send arriving late changes nothing")
         core.merge_listening(hub, {"junk": {"a": [1, 1]}, "2026-10": {"b": "junk"}})
         self.assertNotIn("junk", hub)
+        core.merge_listening(hub, {"2026-13": {"a": [1, 1]}, "2026-09": {"a": {"x": 1}, "b": [float("nan"), 1], "c": [1e999, 1]}})
+        self.assertNotIn("2026-13", hub)
+        self.assertEqual(hub.get("2026-09", {}), {})
 
     def test_listening_months_add_up_devices_newest_first(self):
         tags = {"1/a.flac": {"artist": "Queen"}, "1/b.flac": {"artist": "queen"}, "1/c.flac": {"artist": "Muse"}}

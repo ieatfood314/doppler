@@ -329,12 +329,14 @@ def merge_listening(into: dict, listened: dict) -> bool:
     if not isinstance(listened, dict):
         return False
     for month, tracks in listened.items():
-        if not isinstance(tracks, dict) or not re.fullmatch(r"\d{4}-\d{2}", str(month)):
+        if not isinstance(tracks, dict) or not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", str(month)):
             continue
         for track, value in tracks.items():
             try:
                 seconds, plays = float(value[0]), int(value[1])
-            except (TypeError, ValueError, IndexError):
+            except (TypeError, ValueError, IndexError, KeyError, OverflowError):
+                continue
+            if not 0 <= seconds < 1e9 or plays < 0:
                 continue
             mine = into.setdefault(str(month), {})
             old = mine.get(track)

@@ -60,6 +60,15 @@ class Counting(unittest.TestCase):
         self.assertEqual(months[0]["top"][0]["id"], "1/a.flac")
         self.assertEqual(months[0]["top"][0]["seconds"], 35)
 
+    def test_old_months_not_yet_sent_survive_a_restart(self):
+        p = self.player
+        p.listened = {"2020-01": {"1/a.flac": [90.0, 1]}}
+        p._save()
+        config = dict(p.config, hub="http://127.0.0.1:9")
+        again = Player(config, self.dir.name + "/state", self.dir.name + "/run")
+        self.assertEqual(again.listened, {"2020-01": {"1/a.flac": [90.0, 1]}})
+        self.assertEqual(again._listened_out, {"2020-01": {"1/a.flac": [90.0, 1]}})
+
     def test_recent_is_newest_first_and_skips_unplayed(self):
         p = self.player
         p.library["1/c.flac"] = {"id": "1/c.flac", "title": "c", "duration": 200}

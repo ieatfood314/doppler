@@ -165,6 +165,13 @@ class Hub:
         tags = self.library.tracks if self.library else {}
         return core.listening_months(sources, tags)
 
+    def year_in_music(self, year: int) -> dict:
+        """The year's listening on every device together, for its story."""
+        with self.changed:
+            sources = json.loads(json.dumps(self.listening))
+        tags = self.library.tracks if self.library else {}
+        return core.year_in_music(sources, tags, year)
+
     # --- writing
 
     def add_plays(self, body: dict) -> dict:
@@ -488,6 +495,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"playsRev": hub.state["playsRev"], "plays": hub.plays()})
         if path == "/api/listening":
             return self._json({"months": hub.listening_months()})
+        if path == "/api/wrapped":
+            try:
+                year = int(query.get("year", ""))
+            except ValueError:
+                return self._json({"error": "year is required"}, 400)
+            return self._json(hub.year_in_music(year))
         if path == "/api/session":
             return self._json(hub.session(query.get("playlist", ""), query.get("have")))
         if path == "/api/library":

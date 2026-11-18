@@ -192,5 +192,18 @@ class Plays(unittest.TestCase):
         self.assertEqual(nov["top"][0], ["1/a.flac", 600, 2])
 
 
+    def test_year_in_music_sums_the_year_only(self):
+        tags = {"1/a.flac": {"artist": "Queen"}, "1/b.flac": {"artist": "queen"}, "1/c.flac": {"artist": "Muse"}}
+        year = core.year_in_music({
+            "desk": {"2026-11": {"1/a.flac": [600.0, 2], "1/c.flac": [200.0, 1]}, "2026-01": {"1/b.flac": [900.0, 3]}},
+            "phone": {"2026-11": {"1/b.flac": [300.0, 1]}, "2025-12": {"1/c.flac": [5000.0, 9]}},
+        }, tags, 2026)
+        self.assertEqual((year["seconds"], year["plays"], year["songs"], year["artistCount"]), (2000, 7, 3, 2))
+        self.assertEqual(year["months"][0], 900)
+        self.assertEqual(year["months"][10], 1100)
+        self.assertEqual(year["artists"], [["Queen", 1800, "1/b.flac"], ["Muse", 200, "1/c.flac"]])
+        self.assertEqual(year["top"][0], ["1/b.flac", 1200, 4])
+        self.assertEqual(core.year_in_music({}, {}, 2026)["seconds"], 0)
+
 if __name__ == "__main__":
     unittest.main()

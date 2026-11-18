@@ -17,8 +17,42 @@ data class MonthHeard(
             o.optJSONArray("top").rows { Triple(it.getString(0), it.getLong(1), it.optInt(2)) },
         )
 
-        private fun <T> JSONArray?.rows(make: (JSONArray) -> T): List<T> =
-            if (this == null) emptyList() else (0 until length()).mapNotNull { i -> optJSONArray(i)?.let { runCatching { make(it) }.getOrNull() } }
+    }
+}
+
+private fun <T> JSONArray?.rows(make: (JSONArray) -> T): List<T> =
+    if (this == null) emptyList() else (0 until length()).mapNotNull { i -> optJSONArray(i)?.let { runCatching { make(it) }.getOrNull() } }
+
+/** A year as the hub tells it, for its story: time heard month by month, how many songs and artists,
+ * and the artists and songs heard most. */
+data class YearHeard(
+    val year: Int, val seconds: Long, val plays: Int, val songs: Int, val artistCount: Int,
+    val months: List<Long>, val artists: List<Pair<String, Long>>, val top: List<Triple<String, Long, Int>>,
+) {
+    /** The month heard most, 0 for January. */
+    val best: Int get() = months.indices.maxByOrNull { months[it] } ?: 0
+
+    companion object {
+        fun from(o: JSONObject): YearHeard {
+            val m = o.optJSONArray("months")
+            return YearHeard(
+                o.optInt("year"), o.optLong("seconds"), o.optInt("plays"), o.optInt("songs"), o.optInt("artistCount"),
+                (0 until 12).map { m?.optLong(it) ?: 0L },
+                o.optJSONArray("artists").rows { it.getString(0) to it.getLong(1) },
+                o.optJSONArray("top").rows { Triple(it.getString(0), it.getLong(1), it.optInt(2)) },
+            )
+        }
+
+        /** The year whose story is out in [today]'s month: this one in December, last one in January. */
+        fun season(today: YearMonth): Int? = when (today.monthValue) { 12 -> today.year; 1 -> today.year - 1; else -> null }
+
+        /** The year whose story Listening offers while it shows [month]: the month's own year once that
+         * year is over (or in its December), and last year in January. Only a year with something heard. */
+        fun storyFor(month: YearMonth, today: YearMonth, heard: List<MonthHeard>): Int? {
+            val year = if (month == today && today.monthValue == 1) month.year - 1 else month.year
+            if (year > today.year || (year == today.year && today.monthValue != 12)) return null
+            return year.takeIf { heard.any { it.month.startsWith("$year-") && it.seconds > 0 } }
+        }
     }
 }
 

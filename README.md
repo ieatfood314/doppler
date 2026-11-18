@@ -64,6 +64,7 @@ doppler next | prev        skip
 doppler play NAME          play any playlist, artist or album by name
 doppler status             what's playing, where
 doppler listening [MONTH]  how much you listened each month (MONTH like 2026-11)
+doppler wrapped [YEAR]     your year in music
 doppler ui                 open the window
 ```
 
@@ -72,6 +73,8 @@ In the window, `1` and `2` play, Space pauses, the arrow keys skip, Ctrl+F searc
 A song counts as played once you've heard half of it, or four minutes of a long one. Plays from every device add up, and they're counted offline too.
 
 **Listening** shows how much you listened each month, on every device together: the month's hours, the last twelve months side by side (tap or click one to see it), and the artists and songs you heard most. Only time with sound coming out counts, not paused or buffering. It's at the top of **Recent** on the phone, behind **Listening** in the window, and `doppler listening` prints it.
+
+**Your year in music** comes out on 1 December: a few pages to tap through with how long you listened, your biggest month, your top artists and songs, and how many different songs you heard. Through December and January it's at the top of the phone's home screen and next to **Listening** in the window. Earlier years stay on **Listening** (pick a month of that year), and `doppler wrapped 2026` prints any year.
 
 ### Per-playlist EQ (optional)
 

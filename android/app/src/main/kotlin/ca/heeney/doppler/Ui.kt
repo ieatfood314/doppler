@@ -81,6 +81,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -95,6 +96,7 @@ private sealed interface Screen {
     data object Library : Screen
     data object Recent : Screen
     data object Listening : Screen
+    data class Wrapped(val year: Int) : Screen
     data class Playlist(val id: String) : Screen
     data class Browse(val kind: String) : Screen
     data object Settings : Screen
@@ -122,6 +124,7 @@ fun App(engine: Engine, askFiles: () -> Unit, opening: String? = null, opened: (
                 Screen.Library -> Library(engine, state, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
                 Screen.Recent -> RecentPage(engine, state, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
                 Screen.Listening -> ListeningPage(engine, state, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
+                is Screen.Wrapped -> WrappedStory(engine, s.year, close = { stack.removeAt(stack.lastIndex) })
                 is Screen.Playlist -> PlaylistPage(engine, state, s.id, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
                 is Screen.Browse -> BrowsePage(state, s.kind, open = { stack.add(it) }, back = { stack.removeAt(stack.lastIndex) })
                 Screen.Settings -> SettingsPage(engine, state, askFiles, back = { stack.removeAt(stack.lastIndex) })
@@ -177,7 +180,7 @@ fun Wavefronts(color: Color, towardRight: Boolean, modifier: Modifier) {
 @Composable
 private fun Home(engine: Engine, state: UiState, open: (Screen) -> Unit) {
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 22.dp)) {
-        TopLine(state) { open(Screen.Settings) }
+        TopLine(engine, state, open)
         state.elsewhere?.takeIf { it.playing }?.let { Elsewhere(engine, state, it) }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val h = maxHeight
@@ -200,7 +203,12 @@ private fun Home(engine: Engine, state: UiState, open: (Screen) -> Unit) {
 }
 
 @Composable
-private fun TopLine(state: UiState, settings: () -> Unit) {
+private fun TopLine(engine: Engine, state: UiState, open: (Screen) -> Unit) {
+    // In December and January the year's story waits up here.
+    val season = remember { YearHeard.season(java.time.YearMonth.now()) }
+    var months by remember { mutableStateOf(engine.months) }
+    if (season != null) LaunchedEffect(Unit) { months = engine.loadMonths() }
+    val story = season?.takeIf { y -> months.any { it.month.startsWith("$y-") && it.seconds > 0 } }
     val line = when {
         state.message.isNotEmpty() -> state.message
         state.hubUrl.isBlank() -> "Not synced: add your hub in Settings"
@@ -210,8 +218,9 @@ private fun TopLine(state: UiState, settings: () -> Unit) {
         else -> ""
     }
     Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+        story?.let { Box(Modifier.padding(end = 10.dp)) { Pill("Your $it", strong = true) { open(Screen.Wrapped(it)) } } }
         Text(line, Modifier.weight(1f), color = Palette.Dust, size = 13, maxLines = 1)
-        Box(Modifier.offset(x = 10.dp)) { IconButton("Settings", settings) { c -> drawGear(c) } }
+        Box(Modifier.offset(x = 10.dp)) { IconButton("Settings", { open(Screen.Settings) }) { c -> drawGear(c) } }
     }
 }
 
@@ -518,6 +527,9 @@ private fun ListeningPage(engine: Engine, state: UiState, open: (Screen) -> Unit
                 m.plays.takeIf { it > 0 }?.let { if (it == 1) "1 play" else "$it plays" },
                 m.songs.takeIf { it > 0 }?.let { if (it == 1) "1 song" else "$it songs" })
             Text(parts.joinToString(", "), color = Palette.Dust, size = 13, modifier = Modifier.padding(top = 14.dp))
+            YearHeard.storyFor(pickedMonth, now, months)?.let { year ->
+                Box(Modifier.padding(top = 14.dp)) { Pill("Your $year", strong = true) { open(Screen.Wrapped(year)) } }
+            }
         }
         item {
             val values = keys.map { k -> months.firstOrNull { it.month == k.toString() }?.seconds ?: 0L }
@@ -549,13 +561,14 @@ private fun ListeningPage(engine: Engine, state: UiState, open: (Screen) -> Unit
 
 /** Twelve months as columns of stars, the tallest month nine stars high. Tap a column to pick it. */
 @Composable
-private fun MonthStars(keys: List<String>, values: List<Long>, picked: String, modifier: Modifier, pick: (String) -> Unit) {
+private fun MonthStars(keys: List<String>, values: List<Long>, picked: String, modifier: Modifier, height: Dp = 112.dp,
+                       tappable: Boolean = true, pick: (String) -> Unit) {
     val rows = 9
     val top = values.maxOrNull() ?: 0L
     Column(modifier.fillMaxWidth()) {
-        Canvas(Modifier.fillMaxWidth().height(112.dp).pointerInput(keys) {
+        Canvas(Modifier.fillMaxWidth().height(height).then(if (!tappable) Modifier else Modifier.pointerInput(keys) {
             detectTapGestures { p -> pick(keys[(p.x / (size.width / keys.size)).toInt().coerceIn(0, keys.lastIndex)]) }
-        }.semantics { contentDescription = "Listening by month" }) {
+        }).semantics { contentDescription = "Listening by month" }) {
             val col = size.width / keys.size
             val pitch = minOf(col * 0.5f, size.height / rows)
             keys.forEachIndexed { i, key ->
@@ -573,12 +586,142 @@ private fun MonthStars(keys: List<String>, values: List<Long>, picked: String, m
         Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
             for (key in keys) {
                 val letter = java.time.YearMonth.parse(key).month.getDisplayName(java.time.format.TextStyle.NARROW_STANDALONE, java.util.Locale.getDefault())
-                Text(letter, Modifier.weight(1f).clickable { pick(key) }, color = if (key == picked) Palette.Starlight else Palette.Faint,
+                Text(letter, Modifier.weight(1f).then(if (tappable) Modifier.clickable { pick(key) } else Modifier), color = if (key == picked) Palette.Starlight else Palette.Faint,
                     size = 12, align = TextAlign.Center, maxLines = 1)
             }
         }
     }
 }
+
+/** The year in music, a page at a time: tap the right of the screen for the next, the left for the one
+ * before. The year, how long, the biggest month, the top artist and song, how many songs, then all of it. */
+@Composable
+private fun WrappedStory(engine: Engine, year: Int, close: () -> Unit) {
+    var heard by remember { mutableStateOf<YearHeard?>(null) }
+    var loaded by remember { mutableStateOf(false) }
+    LaunchedEffect(year) { heard = engine.loadYear(year); loaded = true }
+    val y = heard
+    val pages = if (y != null && y.seconds > 0) 7 else 1
+    var page by rememberSaveable { mutableStateOf(0) }
+    val animate = !reducedMotion(LocalContext.current)
+    fun step(by: Int) { val p = page + by; if (p >= pages) close() else if (p >= 0) page = p }
+    BoxWithConstraints(Modifier.fillMaxSize().background(Palette.Void).pointerInput(pages) {
+        detectTapGestures { p -> step(if (p.x < size.width / 3) -1 else 1) }
+    }.statusBarsPadding().navigationBarsPadding()) {
+        val room = maxWidth - 56.dp
+        Row(Modifier.align(Alignment.TopCenter).padding(top = 20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            for (i in 0 until pages) Box(Modifier.size(6.dp).clip(CircleShape)
+                .background(if (i == page) Palette.Starlight else if (i < page) Palette.Dust else Palette.Faint))
+        }
+        Box(Modifier.align(Alignment.TopEnd).padding(top = 4.dp, end = 8.dp)) { IconButton("Close", close) { c -> drawClose(c) } }
+        AnimatedContent(page, Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 64.dp),
+            transitionSpec = { fadeIn(tween(260)) togetherWith fadeOut(tween(120)) }, label = "story") { at ->
+            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
+                if (y == null || y.seconds == 0L || at == 0) {
+                    DotNumber(year.toString(), 120.dp, room, animate)
+                    val words = when {
+                        !loaded -> ""
+                        y == null -> "Connect to Wi-Fi to see it"
+                        y.seconds == 0L -> "Nothing heard in $year"
+                        else -> "Your year in music"
+                    }
+                    Text(words, Modifier.padding(top = 26.dp), color = if (y != null && y.seconds > 0) Palette.Starlight else Palette.Dust,
+                        size = 32, family = Type.Display)
+                } else when (at) {
+                    1 -> {
+                        val minutes = y.seconds / 60
+                        val hours = y.seconds / 3600.0
+                        Text("You listened for", color = Palette.Dust, size = 20)
+                        DotNumber(minutes.toString(), 120.dp, room, animate, Modifier.padding(vertical = 22.dp))
+                        Text(if (minutes == 1L) "minute" else "minutes", color = Palette.Dust, size = 20)
+                        val days = when {
+                            hours >= 48 -> "That's ${Math.round(hours / 24)} days of music"
+                            hours >= 2 -> "That's ${Math.round(hours)} hours of music"
+                            else -> ""
+                        }
+                        if (days.isNotEmpty()) Text(days, Modifier.padding(top = 18.dp), size = 20)
+                    }
+                    2 -> {
+                        Text("Your biggest month", color = Palette.Dust, size = 20)
+                        Text(monthName(y.best), Modifier.padding(top = 4.dp), size = 48, family = Type.Display, maxLines = 1)
+                        Text(hoursMinutes(y.months[y.best]), color = Palette.Dust, size = 18)
+                        val keys = (1..12).map { "%04d-%02d".format(year, it) }
+                        MonthStars(keys, y.months, keys[y.best], Modifier.padding(top = 34.dp), height = 150.dp, tappable = false) {}
+                    }
+                    3 -> {
+                        Text("Your top artist", color = Palette.Dust, size = 20)
+                        Text(y.artists.firstOrNull()?.first ?: "", Modifier.padding(vertical = 6.dp), size = 46, family = Type.Display, maxLines = 3)
+                        Text(hoursMinutes(y.artists.firstOrNull()?.second ?: 0), color = Palette.Dust, size = 18)
+                        Spacer(Modifier.height(28.dp))
+                        y.artists.drop(1).forEachIndexed { i, (name, seconds) -> Ranked(i + 2, name, hoursMinutes(seconds)) }
+                    }
+                    4 -> {
+                        val first = y.top.firstOrNull()
+                        val t = engine.track(first?.first)
+                        Text("Your top song", color = Palette.Dust, size = 20)
+                        Text(t?.title ?: "", Modifier.padding(top = 6.dp), size = 42, family = Type.Display, maxLines = 3)
+                        Text(t?.artist ?: "", Modifier.padding(top = 4.dp, bottom = 4.dp), size = 20, maxLines = 2)
+                        first?.let { (_, seconds, plays) ->
+                            Text((if (plays == 1) "1 play" else "$plays plays") + ", " + hoursMinutes(seconds), color = Palette.Dust, size = 17)
+                        }
+                        Spacer(Modifier.height(28.dp))
+                        y.top.drop(1).forEachIndexed { i, (id, seconds, _) ->
+                            val s = engine.track(id) ?: return@forEachIndexed
+                            Ranked(i + 2, s.title + if (s.artist.isNotBlank()) ", " + s.artist else "", hoursMinutes(seconds))
+                        }
+                    }
+                    5 -> {
+                        Text("You heard", color = Palette.Dust, size = 20)
+                        DotNumber(y.songs.toString(), 120.dp, room, animate, Modifier.padding(vertical = 22.dp))
+                        Text(if (y.songs == 1) "song" else "different songs", color = Palette.Dust, size = 20)
+                        Text("by ${y.artistCount} " + if (y.artistCount == 1) "artist" else "artists", Modifier.padding(top = 18.dp), size = 20)
+                    }
+                    else -> {
+                        DotNumber(year.toString(), 44.dp, room, animate, Modifier.padding(bottom = 28.dp))
+                        Text("Top artists", color = Palette.Dust, size = 14, modifier = Modifier.padding(bottom = 6.dp))
+                        y.artists.forEachIndexed { i, (name, _) -> Ranked(i + 1, name, null, size = 16) }
+                        Text("Top songs", color = Palette.Dust, size = 14, modifier = Modifier.padding(top = 20.dp, bottom = 6.dp))
+                        y.top.forEachIndexed { i, (id, _, _) -> engine.track(id)?.let { Ranked(i + 1, it.title, null, size = 16) } }
+                        Row(Modifier.padding(top = 26.dp), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                            Stat("Minutes", "%,d".format(y.seconds / 60))
+                            Stat("Songs", "%,d".format(y.songs))
+                            Stat("Top month", monthName(y.best))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A number in star numerals, as big as fits in [room]. */
+@Composable
+private fun DotNumber(value: String, size: Dp, room: Dp, animate: Boolean, modifier: Modifier = Modifier) {
+    val fitted = minOf(size, room / (value.length * (5f / 7f + 0.16f)))
+    Row(modifier.semantics { contentDescription = value }, horizontalArrangement = Arrangement.spacedBy(fitted * 0.16f)) {
+        for (d in value) DotNumeral(d.toString(), fitted, Palette.Starlight, lit = true, animate = animate)
+    }
+}
+
+@Composable
+private fun Ranked(rank: Int, name: String, note: String?, size: Int = 17) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(rank.toString(), Modifier.width(26.dp), color = Palette.Faint, size = size)
+        Text(name, Modifier.weight(1f, fill = false), size = size, maxLines = 1)
+        note?.let { Text(it, Modifier.padding(start = 12.dp), color = Palette.Faint, size = size - 3, maxLines = 1) }
+    }
+}
+
+@Composable
+private fun Stat(label: String, value: String) {
+    Column {
+        Text(label, color = Palette.Dust, size = 13)
+        Text(value, size = 26, family = Type.Display, maxLines = 1)
+    }
+}
+
+private fun monthName(index: Int): String =
+    java.time.Month.of(index + 1).getDisplayName(java.time.format.TextStyle.FULL_STANDALONE, java.util.Locale.getDefault())
 
 /** "6 h 05 m", or "45 m" under an hour. */
 private fun hoursMinutes(seconds: Long): String {

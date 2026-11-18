@@ -439,6 +439,22 @@ class Player:
             month["top"] = [dict(self._track_view(t), seconds=s, plays=p) for t, s, p in month.get("top", [])]
         return reply
 
+    def wrapped_view(self, year: int) -> dict:
+        """The year's story, from the hub, or from this install's own count when it can't be reached."""
+        reply = None
+        if self.hub.base:
+            try:
+                reply = self.hub.get(f"/api/wrapped?year={year}", timeout=10)
+            except OSError:
+                pass
+        return self.call(self._wrapped_named, year, reply)
+
+    def _wrapped_named(self, year: int, reply: dict | None) -> dict:
+        if not isinstance(reply, dict) or "top" not in reply:
+            reply = dict(core.year_in_music({"here": self.listened}, self.library, year), local=True)
+        reply["top"] = [dict(self._track_view(t), seconds=s, plays=p) for t, s, p in reply.get("top", [])]
+        return reply
+
     def _check_play(self, ended: bool = False):
         """Count the track that's on as played, once per listen, when enough of it has been heard
         (or it played to its end)."""
@@ -964,6 +980,11 @@ class Api(BaseHTTPRequestHandler):
             return self._json(player.call(player.recent_view))
         if url.path == "/listening":
             return self._json(player.listening_view())
+        if url.path == "/wrapped":
+            try:
+                return self._json(player.wrapped_view(int(query.get("year", ""))))
+            except ValueError:
+                return self._json({"error": "year is required"}, 400)
         if url.path == "/tracks":
             return self._json(player.call(player.tracks_view, unquote(query.get("playlist", "f:"))))
         self._json({"error": "not found"}, 404)

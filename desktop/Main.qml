@@ -98,7 +98,7 @@ Window {
     }
     Timer { id: retry; interval: 2000; onTriggered: win.watch() }
     Timer { interval: 250; running: st && st.playing; repeat: true; onTriggered: win.now = Date.now() }
-    Component.onCompleted: { call("GET", "/state", null, function (d) { take(d); watch() }) }
+    Component.onCompleted: { call("GET", "/state", null, function (d) { take(d); watch() }); loadListening() }
     // For checking the look without a screen: qml6 Main.qml -- <port> <png> [library|playlist id]
     property var args: Qt.application.arguments
     Timer {
@@ -106,6 +106,8 @@ Window {
         onTriggered: { win.contentItem.grabToImage(function (r) { r.saveToFile(args[args.indexOf("--shot") + 1]); Qt.quit() }) }
     }
     Timer { interval: 900; running: args.indexOf("--library") >= 0; onTriggered: { var i = args.indexOf("--library"); if (args[i + 1] && args[i + 1].indexOf("--") !== 0) showPlaylist(args[i + 1]); else if (args[i + 1] === "--recent") showDrawer("recent"); else if (args[i + 1] === "--listening") showDrawer("listening"); else libraryOpen = true } }
+    Timer { interval: 900; running: args.indexOf("--wrapped") >= 0; onTriggered: openWrapped(new Date().getFullYear()) }
+    Timer { interval: 1700; running: args.indexOf("--wrapped") >= 0; onTriggered: wrapPage = +args[args.indexOf("--wrapped") + 1] || 0 }
 
     function position() {
         if (!st) return 0
@@ -121,6 +123,27 @@ Window {
         for (var i = 0; i < listening.months.length; i++) if (listening.months[i].month === key) return listening.months[i]
         return none
     }
+    // The year's story: from December to the end of January for the year ending, and from Listening for
+    // any year gone by.
+    property var wrap: null      // {year, seconds, plays, songs, artistCount, months, artists, top, local}, or {year} while it loads
+    property int wrapPage: 0
+    readonly property int wrapPages: wrap && wrap.seconds ? 7 : 1
+    function openWrapped(year) {
+        wrapPage = 0; wrap = { year: year }
+        call("GET", "/wrapped?year=" + year, null, function (d) { if (d && d.year === year && wrap && wrap.year === year) wrap = d })
+    }
+    function wrapStep(by) { var p = wrapPage + by; if (p >= wrapPages) wrap = null; else if (p >= 0) wrapPage = p }
+    function wrapFor(key) {
+        var y = +key.slice(0, 4), today = new Date()
+        if (key === monthKey(0) && today.getMonth() === 0) y -= 1
+        if (!listening || y > today.getFullYear() || (y === today.getFullYear() && today.getMonth() !== 11)) return 0
+        for (var i = 0; i < listening.months.length; i++)
+            if (listening.months[i].month.slice(0, 4) === String(y) && listening.months[i].seconds > 0) return y
+        return 0
+    }
+    property int wrapNow: { listening; return wrapFor(monthKey(0)) }
+    function monthName(i) { return new Date(2000, i, 1).toLocaleDateString(Qt.locale(), "MMMM") }
+    function grouped(n) { return Number(n || 0).toLocaleString(Qt.locale(), "f", 0) }
     function hm(s) { var m = Math.floor((s || 0) / 60); return m >= 60 ? Math.floor(m / 60) + " h " + ("0" + (m % 60)).slice(-2) + " m" : m + " m" }
     function clock(s) { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2) }
     function view(id) { if (!st) return null; for (var i = 0; i < st.playlists.length; i++) if (st.playlists[i].id === id) return st.playlists[i]; return null }
@@ -168,12 +191,14 @@ Window {
         return days < 730 ? "A year ago" : Math.floor(days / 365) + " years ago"
     }
 
-    Shortcut { sequence: "1"; onActivated: act("/slot", { slot: "1" }) }
-    Shortcut { sequence: "2"; onActivated: act("/slot", { slot: "2" }) }
-    Shortcut { sequence: "Space"; onActivated: act("/toggle") }
-    Shortcut { sequence: "Right"; onActivated: act("/next") }
-    Shortcut { sequence: "Left"; onActivated: act("/prev") }
-    Shortcut { sequence: "Escape"; onActivated: { if (confirm.visible) confirm.visible = false; else if (openPlaylist && plFind.text) plFind.text = ""; else if (openPlaylist) openPlaylist = ""; else if (libraryOpen && search.text) search.text = ""; else if (libraryOpen) closeDrawer(); else win.close() } }
+    Shortcut { sequence: "1"; onActivated: act("/slot", { slot: "1" }); enabled: !wrap }
+    Shortcut { sequence: "2"; onActivated: act("/slot", { slot: "2" }); enabled: !wrap }
+    Shortcut { sequence: "Space"; onActivated: act("/toggle"); enabled: !wrap }
+    Shortcut { sequence: "Right"; onActivated: act("/next"); enabled: !wrap }
+    Shortcut { sequence: "Left"; onActivated: act("/prev"); enabled: !wrap }
+    Shortcut { sequences: ["Right", "Space", "Return"]; enabled: !!wrap; onActivated: wrapStep(1) }
+    Shortcut { sequence: "Left"; enabled: !!wrap; onActivated: wrapStep(-1) }
+    Shortcut { sequence: "Escape"; onActivated: { if (wrap) wrap = null; else if (confirm.visible) confirm.visible = false; else if (openPlaylist && plFind.text) plFind.text = ""; else if (openPlaylist) openPlaylist = ""; else if (libraryOpen && search.text) search.text = ""; else if (libraryOpen) closeDrawer(); else win.close() } }
     Shortcut { sequence: "Ctrl+F"; onActivated: { if (openPlaylist) plFind.forceActiveFocus(); else { showDrawer("library"); search.forceActiveFocus() } } }
 
     // ------------------------------------------------------------ the sky
@@ -451,6 +476,7 @@ Window {
                     strong: libraryOpen && !openPlaylist && drawerView === modelData[0]
                     onClicked: { if (strong) closeDrawer(); else showDrawer(modelData[0]) } }
             }
+            Pill { visible: wrapNow > 0; label: "Your " + wrapNow; strong: true; onClicked: openWrapped(wrapNow) }
         }
         Words { anchors { right: parent.right; verticalCenter: parent.verticalCenter }
             color: faint; font.pixelSize: 12
@@ -553,6 +579,7 @@ Window {
             property var m: { listening; return monthOf(listenMonth) }
             property bool hours: m.seconds >= 3600
             property string amount: String(Math.floor(m.seconds / (hours ? 3600 : 60)))
+            property int wrapYear: { listening; return wrapFor(listenMonth) }
             Text { id: listenTitle; text: "Listening"; color: starlight; font.family: sans.name; font.pixelSize: 34; font.weight: Font.Medium }
             Flickable {
                 anchors { top: listenTitle.bottom; left: parent.left; right: parent.right; bottom: parent.bottom; topMargin: 18 }
@@ -575,6 +602,8 @@ Window {
                             + (listenPage.m.plays ? ", " + listenPage.m.plays + (listenPage.m.plays === 1 ? " play" : " plays") : "")
                             + (listenPage.m.songs ? ", " + listenPage.m.songs + (listenPage.m.songs === 1 ? " song" : " songs") : "")
                             + (listening && listening.local ? ", this computer only" : "") }
+                    Item { width: 1; height: 14; visible: listenPage.wrapYear > 0 }
+                    Pill { visible: listenPage.wrapYear > 0; label: "Your " + listenPage.wrapYear; strong: true; onClicked: openWrapped(listenPage.wrapYear) }
                     Item { width: 1; height: 22 }
                     Canvas {
                         id: chart
@@ -798,6 +827,181 @@ Window {
                     font.weight: sortBy === modelData[0] ? Font.Medium : Font.Normal }
                 background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
                 onTriggered: { sortBy = modelData[0]; if (modelData[0] !== "default") loadTracks(openPlaylist) } }
+        }
+    }
+
+    // ------------------------------------------------------------ the year's story
+    // A row of star numerals, as big as fits.
+    component DotNumber: Row {
+        id: dnum
+        property string value: ""
+        property real size: 140
+        property real room: 10000
+        property bool lit: true
+        readonly property real fitted: Math.min(size, room / Math.max(1, value.length * (5 / 7 + 0.16)))
+        spacing: fitted * 0.16
+        Repeater { model: dnum.value.split("")
+            DotNumeral { required property string modelData; digit: modelData; height: dnum.fitted; lit: dnum.lit } }
+    }
+    component Ranked: Row {
+        property int rank: 1
+        property string name: ""
+        property string note: ""
+        property real room: 400
+        spacing: 14
+        Words { width: 18; color: faint; font.pixelSize: 17; text: parent.rank }
+        Words { id: rankedName; width: Math.min(implicitWidth, parent.room - 32 - noteWords.implicitWidth - 14); font.pixelSize: 17; text: parent.name }
+        Words { id: noteWords; color: faint; font.pixelSize: 15; anchors.baseline: rankedName.baseline; text: parent.note }
+    }
+
+    Rectangle {
+        id: story
+        anchors.fill: parent; z: 9; visible: wrap !== null
+        color: "#000000"
+        property var w: wrap || ({})
+        property bool ready: !!wrap && wrap.months !== undefined
+        property bool none: ready && !wrap.seconds
+        property int minutes: ready ? Math.floor(w.seconds / 60) : 0
+        property int best: { if (!ready) return 0; var b = 0; for (var i = 1; i < 12; i++) if (w.months[i] > w.months[b]) b = i; return b }
+        property var artists: ready ? w.artists : []
+        property var songs: ready ? w.top : []
+        property real fit: Math.min(1, width / 960, height / 640)
+        onVisibleChanged: if (visible) forceActiveFocus()
+        Connections { target: win; function onWrapPageChanged() { storyFade.restart() } }
+        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+            onClicked: function (e) { wrapStep(e.x < width / 3 ? -1 : 1) } }
+        Row {
+            anchors { top: parent.top; horizontalCenter: parent.horizontalCenter; topMargin: 30 }
+            spacing: 12
+            Repeater { model: wrapPages
+                Rectangle { required property int index; width: 6; height: 6; radius: 3
+                    color: index === wrapPage ? starlight : index < wrapPage ? dust : faint } }
+        }
+        IconButton { anchors { top: parent.top; right: parent.right; margins: 16 } mark: "close"; tip: "Close (Esc)"; onClicked: wrap = null }
+        Words { anchors { bottom: parent.bottom; horizontalCenter: parent.horizontalCenter; bottomMargin: 24 }
+            visible: story.ready && !!story.w.local; color: faint; font.pixelSize: 12; text: "This computer only" }
+
+        Item {
+            id: storyPage
+            anchors { fill: parent; leftMargin: 40 + 60 * story.fit; rightMargin: 40 + 60 * story.fit; topMargin: 70; bottomMargin: 60 }
+            NumberAnimation { id: storyFade; target: storyPage; property: "opacity"; from: 0; to: 1; duration: 260; easing.type: Easing.OutCubic }
+
+            // The year.
+            Column {
+                visible: wrapPage === 0; anchors.verticalCenter: parent.verticalCenter; width: parent.width; spacing: 30
+                DotNumber { value: String(story.w.year || ""); size: 170 * story.fit; room: parent.width }
+                Text { width: parent.width; wrapMode: Text.Wrap; color: story.none ? dust : starlight; font.family: sans.name
+                    font.pixelSize: 40 * story.fit + 8; font.weight: Font.Medium
+                    text: story.none ? "Nothing heard in " + story.w.year : story.ready ? "Your year in music" : "" }
+            }
+            // How long.
+            Column {
+                visible: wrapPage === 1; anchors.verticalCenter: parent.verticalCenter; width: parent.width; spacing: 26
+                Words { color: dust; font.pixelSize: 24; text: "You listened for" }
+                DotNumber { value: String(story.minutes); size: 150 * story.fit; room: parent.width }
+                Words { color: dust; font.pixelSize: 24; text: story.minutes === 1 ? "minute" : "minutes" }
+                Words { topPadding: 10; font.pixelSize: 24; text: { var h = (story.w.seconds || 0) / 3600
+                    return h >= 48 ? "That's " + Math.round(h / 24) + " days of music" : h >= 2 ? "That's " + Math.round(h) + " hours of music" : "" } }
+            }
+            // When.
+            Column {
+                visible: wrapPage === 2; anchors.verticalCenter: parent.verticalCenter; width: parent.width; spacing: 10
+                Words { color: dust; font.pixelSize: 24; text: "Your biggest month" }
+                Text { color: starlight; font.family: sans.name; font.pixelSize: 64 * story.fit + 12; font.weight: Font.Medium; text: monthName(story.best) }
+                Words { color: dust; font.pixelSize: 22; text: story.ready ? hm(story.w.months[story.best]) : "" }
+                Item { width: 1; height: 26 }
+                Canvas {
+                    id: yearStars
+                    width: Math.min(parent.width, 720); height: 170 * story.fit + 20
+                    property var values: story.ready ? story.w.months : []
+                    readonly property int rows: 9
+                    onValuesChanged: requestPaint(); onWidthChanged: requestPaint(); onHeightChanged: requestPaint()
+                    onPaint: {
+                        var c = getContext("2d"); c.reset()
+                        if (values.length !== 12) return
+                        var col = width / 12, pitch = Math.min(col * 0.5, height / rows), top = Math.max.apply(null, values)
+                        for (var i = 0; i < 12; i++) {
+                            var lit = values[i] > 0 && top > 0 ? Math.max(1, Math.round(values[i] / top * rows)) : 0, x = (i + 0.5) * col
+                            for (var r = 0; r < rows; r++) {
+                                var y = height - (r + 0.5) * pitch
+                                if (r < lit) {
+                                    var t = i === story.best ? starlight : dust
+                                    c.fillStyle = Qt.rgba(t.r, t.g, t.b, i === story.best ? 1 : 0.55); c.beginPath(); c.arc(x, y, pitch * 0.33, 0, Math.PI * 2); c.fill()
+                                } else {
+                                    c.fillStyle = Qt.rgba(0.29, 0.275, 0.376, 0.45); c.beginPath(); c.arc(x, y, pitch * 0.07, 0, Math.PI * 2); c.fill()
+                                }
+                            }
+                        }
+                    }
+                }
+                Row {
+                    width: yearStars.width
+                    Repeater { model: 12
+                        Words { required property int index; width: parent.width / 12; horizontalAlignment: Text.AlignHCenter; font.pixelSize: 12
+                            color: index === story.best ? starlight : faint; text: monthName(index).slice(0, 3) } }
+                }
+            }
+            // Who.
+            Column {
+                visible: wrapPage === 3; anchors.verticalCenter: parent.verticalCenter; width: parent.width; spacing: 10
+                Words { color: dust; font.pixelSize: 24; text: "Your top artist" }
+                Text { width: parent.width; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight; color: starlight; font.family: sans.name
+                    font.pixelSize: 72 * story.fit + 12; font.weight: Font.Medium; lineHeight: 0.95
+                    text: story.artists.length ? story.artists[0][0] : "" }
+                Words { color: dust; font.pixelSize: 22; text: story.artists.length ? hm(story.artists[0][1]) : "" }
+                Item { width: 1; height: 26 }
+                Repeater { model: story.artists.slice(1)
+                    Ranked { required property var modelData; required property int index; rank: index + 2; room: storyPage.width
+                        name: modelData[0]; note: hm(modelData[1]) } }
+            }
+            // What.
+            Column {
+                visible: wrapPage === 4; anchors.verticalCenter: parent.verticalCenter; width: parent.width; spacing: 10
+                Words { color: dust; font.pixelSize: 24; text: "Your top song" }
+                Text { width: parent.width; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight; color: starlight; font.family: sans.name
+                    font.pixelSize: 64 * story.fit + 12; font.weight: Font.Medium; lineHeight: 0.95
+                    text: story.songs.length ? story.songs[0].title : "" }
+                Words { width: parent.width; font.pixelSize: 24; text: story.songs.length ? story.songs[0].artist : "" }
+                Words { color: dust; font.pixelSize: 20
+                    text: story.songs.length ? (story.songs[0].plays === 1 ? "1 play" : story.songs[0].plays + " plays") + ", " + hm(story.songs[0].seconds) : "" }
+                Item { width: 1; height: 26 }
+                Repeater { model: story.songs.slice(1)
+                    Ranked { required property var modelData; required property int index; rank: index + 2; room: storyPage.width
+                        name: modelData.title + (modelData.artist ? ", " + modelData.artist : ""); note: hm(modelData.seconds) } }
+            }
+            // How many.
+            Column {
+                visible: wrapPage === 5; anchors.verticalCenter: parent.verticalCenter; width: parent.width; spacing: 26
+                Words { color: dust; font.pixelSize: 24; text: "You heard" }
+                DotNumber { value: String(story.w.songs || 0); size: 150 * story.fit; room: parent.width }
+                Words { color: dust; font.pixelSize: 24; text: story.w.songs === 1 ? "song" : "different songs" }
+                Words { topPadding: 10; font.pixelSize: 24; text: "by " + grouped(story.w.artistCount) + (story.w.artistCount === 1 ? " artist" : " artists") }
+            }
+            // All of it.
+            Column {
+                visible: wrapPage === 6; anchors.verticalCenter: parent.verticalCenter; width: parent.width; spacing: 30
+                DotNumber { value: String(story.w.year || ""); size: 64 * story.fit + 10; room: parent.width }
+                Row {
+                    width: parent.width; spacing: 40
+                    Column { width: (parent.width - 40) * 0.42; spacing: 8
+                        Words { color: dust; font.pixelSize: 15; bottomPadding: 4; text: "Top artists" }
+                        Repeater { model: story.artists
+                            Ranked { required property var modelData; required property int index; rank: index + 1; room: parent.width; name: modelData[0] } } }
+                    Column { width: (parent.width - 40) * 0.58; spacing: 8
+                        Words { color: dust; font.pixelSize: 15; bottomPadding: 4; text: "Top songs" }
+                        Repeater { model: story.songs
+                            Ranked { required property var modelData; required property int index; rank: index + 1; room: parent.width; name: modelData.title } } }
+                }
+                Row {
+                    spacing: 40
+                    Column { Words { color: dust; font.pixelSize: 15; text: "Minutes" }
+                        Text { color: starlight; font.family: sans.name; font.pixelSize: 40; font.weight: Font.Medium; text: grouped(story.minutes) } }
+                    Column { Words { color: dust; font.pixelSize: 15; text: "Songs" }
+                        Text { color: starlight; font.family: sans.name; font.pixelSize: 40; font.weight: Font.Medium; text: grouped(story.w.songs) } }
+                    Column { Words { color: dust; font.pixelSize: 15; text: "Top month" }
+                        Text { color: starlight; font.family: sans.name; font.pixelSize: 40; font.weight: Font.Medium; text: monthName(story.best) } }
+                }
+            }
         }
     }
 

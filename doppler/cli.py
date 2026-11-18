@@ -21,6 +21,7 @@ HELP = """doppler: two playlists, one keypress, the same place on every device
   doppler play NAME        play a folder, artist, album or playlist you made, by name
   doppler status           what's playing, here and elsewhere
   doppler listening        how much you listened each month (add 2026-11 for one month)
+  doppler wrapped          your year in music (add 2025 for another year)
   doppler ui               open the window
   doppler connect URL      point this computer's player at a hub
   doppler daemon           run the player (the installer sets this up as a service)
@@ -117,6 +118,35 @@ def listening(month: str | None = None):
         print(f"  {hours(t['seconds']):>10}  {t['artist'] + ' - ' if t['artist'] else ''}{t['title']}")
 
 
+def wrapped_year(today=None) -> int:
+    """The year the story is about: this one in December, last one in January, else this one so far."""
+    today = today or time.localtime()
+    return today.tm_year - 1 if today.tm_mon == 1 else today.tm_year
+
+
+def wrapped(year: str | None = None):
+    if year is not None and not (year.isdigit() and len(year) == 4):
+        sys.exit("doppler: give a year, like 2026")
+    year = int(year) if year else wrapped_year()
+    w = ask(f"/wrapped?year={year}")
+    if not w.get("seconds"):
+        print(f"Nothing heard in {year}")
+        return
+    if w.get("local"):
+        print("hub unreachable: this computer's own listening only\n")
+    best = max(range(12), key=lambda i: w["months"][i])
+    month = time.strftime("%B", time.strptime(str(best + 1), "%m"))
+    print(f"Your {year} in music\n")
+    print(f"  {w['seconds'] // 60:,} minutes, the most in {month}")
+    print(f"  {w['songs']:,} different songs by {w['artistCount']:,} artists\n")
+    print("  Top artists")
+    for i, (name, seconds, _) in enumerate(w["artists"], 1):
+        print(f"  {i}  {name}  ({hours(seconds)})")
+    print("\n  Top songs")
+    for i, t in enumerate(w["top"], 1):
+        print(f"  {i}  {t['artist'] + ' - ' if t['artist'] else ''}{t['title']}  ({t['plays']} plays, {hours(t['seconds'])})")
+
+
 def play_named(name: str):
     state = ask("/state")
     wanted = name.casefold()
@@ -170,6 +200,8 @@ def main(argv=None):
         status()
     elif command in ("listening", "stats"):
         listening(rest[0] if rest else None)
+    elif command == "wrapped":
+        wrapped(rest[0] if rest else None)
     elif command == "ui":
         open_ui()
     elif command == "version":

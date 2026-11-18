@@ -282,6 +282,8 @@ class Plays(unittest.TestCase):
         self.assertEqual(self.hub.listening_months()[0]["seconds"], 180)
         self.hub.flush()
         self.assertEqual(Hub(self.dir.name, clock=Clock()).listening_months()[0]["seconds"], 180)
+        self.assertEqual(self.hub.year_in_music(2026)["seconds"], 180)
+        self.assertEqual(self.hub.year_in_music(2025)["seconds"], 0)
 
 
 if __name__ == "__main__":

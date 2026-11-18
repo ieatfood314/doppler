@@ -345,9 +345,8 @@ def merge_listening(into: dict, listened: dict) -> bool:
     return changed
 
 
-def listening_months(sources: dict, tags: dict, top: int = 5) -> list[dict]:
-    """Every month anyone listened, newest first: time heard and songs played on every device
-    together, how many different songs, and the artists and songs heard most."""
+def _heard(sources: dict) -> dict[str, dict]:
+    """Every device's listening added together: {month: {track: [seconds, plays]}}."""
     months: dict[str, dict] = {}
     for listened in sources.values():
         for month, tracks in listened.items():
@@ -355,23 +354,70 @@ def listening_months(sources: dict, tags: dict, top: int = 5) -> list[dict]:
             for track, (seconds, plays) in tracks.items():
                 old = into.get(track) or [0.0, 0]
                 into[track] = [old[0] + seconds, old[1] + plays]
+    return months
+
+
+def _by_artist(tracks: dict, tags: dict) -> list[list]:
+    """[name, seconds, the track of theirs heard most] for each artist, most heard first. The artist is
+    the track's artist tag, else its album artist, else the "Artist - Title" in its file name."""
+    artists: dict[str, list] = {}
+    for track, (seconds, _) in tracks.items():
+        meta = tags.get(track) or {}
+        name = str(meta.get("artist") or meta.get("albumartist") or "").strip() or split_title(track)[0]
+        if name:
+            entry = artists.setdefault(_norm(name), [name, 0.0, track, -1.0])
+            entry[1] += seconds
+            if seconds > entry[3]:
+                entry[2:] = [track, seconds]
+    return [e[:3] for e in sorted(artists.values(), key=lambda e: (-e[1], e[0]))]
+
+
+def _songs(tracks: dict) -> int:
+    """Different songs heard: played, or heard for half a minute."""
+    return sum(1 for s, p in tracks.values() if p or s >= 30)
+
+
+def listening_months(sources: dict, tags: dict, top: int = 5) -> list[dict]:
+    """Every month anyone listened, newest first: time heard and songs played on every device
+    together, how many different songs, and the artists and songs heard most."""
+    months = _heard(sources)
     out = []
     for month in sorted(months, reverse=True):
         tracks = months[month]
-        artists: dict[str, list] = {}
-        for track, (seconds, _) in tracks.items():
-            meta = tags.get(track) or {}
-            name = str(meta.get("artist") or meta.get("albumartist") or "").strip() or split_title(track)[0]
-            if name:
-                entry = artists.setdefault(_norm(name), [name, 0.0])
-                entry[1] += seconds
         songs = sorted(tracks.items(), key=lambda kv: (-kv[1][0], kv[0]))
         out.append({
             "month": month,
             "seconds": round(sum(s for s, _ in tracks.values())),
             "plays": sum(p for _, p in tracks.values()),
-            "songs": sum(1 for s, p in tracks.values() if p or s >= 30),
-            "artists": [[n, round(s)] for n, s in sorted(artists.values(), key=lambda e: (-e[1], e[0]))[:top]],
+            "songs": _songs(tracks),
+            "artists": [[n, round(s)] for n, s, _ in _by_artist(tracks, tags)[:top]],
             "top": [[t, round(s), p] for t, (s, p) in songs[:top]],
         })
     return out
+
+
+def year_in_music(sources: dict, tags: dict, year: int, top: int = 5) -> dict:
+    """The year's listening on every device together, for the story at the end of it: time heard, month
+    by month, how many songs and artists, and the artists (with the track of theirs heard most) and
+    songs heard most."""
+    tracks: dict[str, list] = {}
+    months = [0.0] * 12
+    for month, heard in _heard(sources).items():
+        if not month.startswith(f"{year:04d}-"):
+            continue
+        for track, (seconds, plays) in heard.items():
+            old = tracks.get(track) or [0.0, 0]
+            tracks[track] = [old[0] + seconds, old[1] + plays]
+            months[int(month[5:7]) - 1] += seconds
+    artists = _by_artist(tracks, tags)
+    songs = sorted(tracks.items(), key=lambda kv: (-kv[1][0], -kv[1][1], kv[0]))
+    return {
+        "year": year,
+        "seconds": round(sum(months)),
+        "plays": sum(p for _, p in tracks.values()),
+        "songs": _songs(tracks),
+        "artistCount": len(artists),
+        "months": [round(s) for s in months],
+        "artists": [[n, round(s), t] for n, s, t in artists[:top]],
+        "top": [[t, round(s), p] for t, (s, p) in songs[:top]],
+    }

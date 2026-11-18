@@ -960,6 +960,16 @@ class Engine private constructor(private val context: Context) {
         return months
     }
 
+    /** The year's story from the hub, or the last copy of it when the hub can't be asked. */
+    suspend fun loadYear(year: Int): YearHeard? {
+        val o = withContext(Dispatchers.IO) { runCatching { hub.json("GET", "/api/wrapped?year=$year", timeoutMs = 15_000) }.getOrNull() }
+        if (o != null && o.has("top")) {
+            store.saveJson("wrapped-$year.json", o)
+            return YearHeard.from(o)
+        }
+        return store.loadJson("wrapped-$year.json")?.let(YearHeard::from)
+    }
+
     private fun monthsFrom(o: JSONObject?): List<MonthHeard> =
         o?.optJSONArray("months")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(MonthHeard::from) } } ?: emptyList()
 

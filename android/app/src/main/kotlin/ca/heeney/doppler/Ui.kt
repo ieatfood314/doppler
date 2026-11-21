@@ -306,13 +306,17 @@ private fun NowPlaying(engine: Engine, state: UiState, open: (Screen) -> Unit) {
         }
     }
     val color = state.slots.entries.firstOrNull { it.value == state.playlist }?.key?.let { Palette.slot(it) } ?: Palette.Starlight
+    var acting by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-        // The song and where it's from open that playlist, at the song.
-        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-            .clickable(enabled = state.playlist != null) { state.playlist?.let { open(Screen.Playlist(it)) } }
-            .semantics { contentDescription = "${track.title}. Open ${state.playlistName.ifBlank { "the playlist" }}" }) {
-            Text(track.title, color = Palette.Starlight, size = 24, family = Type.Display, maxLines = 1)
-            Text(listOf(track.artist, state.playlistName).filter { it.isNotEmpty() }.joinToString(", from "), color = Palette.Dust, size = 14, maxLines = 1)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            // The song and where it's from open that playlist, at the song.
+            Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
+                .clickable(enabled = state.playlist != null) { state.playlist?.let { open(Screen.Playlist(it)) } }
+                .semantics { contentDescription = "${track.title}. Open ${state.playlistName.ifBlank { "the playlist" }}" }) {
+                Text(track.title, color = Palette.Starlight, size = 24, family = Type.Display, maxLines = 1)
+                Text(listOf(track.artist, state.playlistName).filter { it.isNotEmpty() }.joinToString(", from "), color = Palette.Dust, size = 14, maxLines = 1)
+            }
+            IconButton("More for ${track.title}", { acting = true }, tint = Palette.Dust) { c -> drawMore(c) }
         }
         SeekBar(position, duration, color, Modifier.fillMaxWidth().height(40.dp).padding(top = 10.dp)) { engine.seek(it) }
         Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -327,6 +331,7 @@ private fun NowPlaying(engine: Engine, state: UiState, open: (Screen) -> Unit) {
             Text(clock(duration), color = Palette.Faint, size = 12)
         }
     }
+    if (acting) TrackMenu(engine, state, track, state.playlist, open) { acting = false }
 }
 
 fun clock(ms: Long): String {

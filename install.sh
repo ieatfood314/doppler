@@ -58,6 +58,8 @@ if [ -n "$player" ]; then
     command -v mpv >/dev/null || die "the player needs mpv."
     python3 -c 'import dbus, gi' 2>/dev/null || \
         say "Note: media keys need python-dbus and python-gobject; everything else works without them."
+    python3 -c 'import gi; gi.require_version("AyatanaAppIndicator3", "0.1"); from gi.repository import AyatanaAppIndicator3' 2>/dev/null || \
+        say "Note: the tray icon needs Ayatana AppIndicator (gir1.2-ayatanaappindicator3-0.1, or libayatana-appindicator on Arch); everything else works without it."
     python3 - "$here" "$hub_given" "$hub" "$root" "$device" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -83,7 +85,8 @@ PY
     systemctl --user enable -q doppler.service
     systemctl --user restart doppler.service
     say "The player is running in the background. Bind two keys to:  doppler 1   and   doppler 2"
-    say "The window is in your app launcher as Doppler, or: doppler ui"
+    say "Click the tray icon for playback controls and the window."
+    say "The window is also in your app launcher as Doppler, or: doppler ui"
 fi
 
 case ":$PATH:" in

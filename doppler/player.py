@@ -1,6 +1,6 @@
 """The desktop player: a background process with no window. It plays through mpv, keeps the hub
 up to date, hands over when another device starts playing, and answers the `doppler` command,
-the media keys (MPRIS) and the window when it is open."""
+the media keys (MPRIS), the tray icon and the window when it is open."""
 
 from __future__ import annotations
 
@@ -115,6 +115,7 @@ class Player:
         self.ui_rev = 1
         self.ui_changed = threading.Condition()
         self.mpris = None
+        self.tray = None
         self._outbox: dict[str, dict] = {}
         self._outbox_ready = threading.Condition()
         self._dir_cache: dict[str, tuple[float, set]] = {}
@@ -189,6 +190,8 @@ class Player:
             self.ui_changed.notify_all()
         if self.mpris:
             self.mpris.update(self.mpris_state())
+        if self.tray:
+            self.tray.update(self.mpris_state())
 
     def scan_local(self):
         """With no hub, the library is just the folder on this machine, named from its files."""
@@ -1031,8 +1034,14 @@ def run(mpv_extra=()):
     try:
         from .mpris import Mpris
         player.mpris = Mpris(player)
-    except Exception as error:  # no D-Bus here: media keys just won't reach us
+    except Exception as error:  # no D-Bus here: media keys and the tray won't reach us
         print(f"doppler: media keys are off ({error})", flush=True)
+    if player.mpris:  # the tray shares MPRIS's GLib loop
+        try:
+            from .tray import Tray
+            player.tray = Tray(player)
+        except Exception as error:  # AppIndicator isn't installed: the rest of the player is unaffected
+            print(f"doppler: tray icon is off ({error})", flush=True)
     import signal
     signal.signal(signal.SIGTERM, lambda *_: player.events.put(("quit", None)))
     signal.signal(signal.SIGINT, lambda *_: player.events.put(("quit", None)))

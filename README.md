@@ -8,7 +8,7 @@ Press **1** and playlist 1 plays, shuffled. Press **2** and playlist 2 plays. Pr
 
 - **A folder is a playlist.** Every folder in your music library is one, with no m3u files to keep up to date. So is every artist and every album, from the files' tags. Slots 1 and 2 start out as the folders named `1` and `2`. You can make your own playlists from any tracks, and put any playlist on either slot.
 - **Untouched audio.** The file goes straight to the output: no volume scaling, ReplayGain, resampling filter or normalisation, on either side. A 24-bit FLAC stays 24-bit.
-- **Out of the way.** On a computer it's a background service you drive from a keyboard shortcut or the media keys. The window only exists while you're looking at it.
+- **Out of the way.** On a computer it's a background service you drive from a keyboard shortcut, the media keys or the tray icon. The window only exists while you're looking at it.
 - **Careful with the phone's speaker.** The phone asks before playing out loud when nothing is plugged in or connected.
 
 <img src="docs/phone.png" width="300" alt="The phone app playing playlist 1">
@@ -34,7 +34,7 @@ It listens on `127.0.0.1:4635`. There's no login, so keep it off the open Intern
 
 ### A Linux computer
 
-You need `mpv`. The window also needs Qt 6's `qml` runtime (`qt6-declarative`), and the media keys need `python-dbus` and `python-gobject`.
+You need `mpv`. The window also needs Qt 6's `qml` runtime (`qt6-declarative`), and the media keys need `python-dbus` and `python-gobject`. The tray icon needs those and Ayatana AppIndicator (`gir1.2-ayatanaappindicator3-0.1`, or `libayatana-appindicator` on Arch).
 
 ```sh
 git clone https://github.com/ieatfood314/doppler ~/.local/share/doppler/app
@@ -67,6 +67,8 @@ doppler listening [MONTH]  how much you listened each month (MONTH like 2026-11)
 doppler wrapped [YEAR]     your year in music
 doppler ui                 open the window
 ```
+
+Click Doppler's tray icon to play or pause, skip, start playlist 1 or 2, or open the window. Middle-click pauses or resumes. The icon stays after the window closes.
 
 In the window, `1` and `2` play, Space pauses, the arrow keys skip, Ctrl+F searches (inside a playlist when one is open) and Esc closes it.
 

@@ -200,6 +200,7 @@ Window {
     Shortcut { sequence: "Left"; enabled: !!wrap; onActivated: wrapStep(-1) }
     Shortcut { sequence: "Escape"; onActivated: { if (wrap) wrap = null; else if (confirm.visible) confirm.visible = false; else if (openPlaylist && plFind.text) plFind.text = ""; else if (openPlaylist) openPlaylist = ""; else if (libraryOpen && search.text) search.text = ""; else if (libraryOpen) closeDrawer(); else win.close() } }
     Shortcut { sequence: "Ctrl+F"; onActivated: { if (openPlaylist) plFind.forceActiveFocus(); else { showDrawer("library"); search.forceActiveFocus() } } }
+    Shortcut { sequence: "Ctrl+Q"; onActivated: win.close() }
 
     // ------------------------------------------------------------ the sky
     Canvas {

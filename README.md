@@ -70,7 +70,7 @@ doppler ui                 open the window
 
 Click Doppler's tray icon to play or pause, skip, start playlist 1 or 2, or open the window. Middle-click pauses or resumes. The icon stays after the window closes.
 
-In the window, `1` and `2` play, Space pauses, the arrow keys skip, Ctrl+F searches (inside a playlist when one is open) and Esc closes it.
+In the window, `1` and `2` play, Space pauses, the arrow keys skip, Ctrl+F searches (inside a playlist when one is open), and Ctrl+Q or Esc closes it.
 
 A song counts as played once you've heard half of it, or four minutes of a long one. Plays from every device add up, and they're counted offline too.
 

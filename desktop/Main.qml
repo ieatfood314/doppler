@@ -11,7 +11,6 @@ Window {
     visible: true
     color: "#000000"
     title: "doppler"
-    icon: "doppler.svg"
 
     readonly property color starlight: "#E9E4FF"
     readonly property color dust: "#8E8AA8"

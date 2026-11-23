@@ -76,6 +76,14 @@ class Counting(unittest.TestCase):
         self.assertEqual([t["id"] for t in p.recent_view()], ["1/b.flac", "1/a.flac"])
         self.assertEqual(p.recent_view()[1]["plays"], 3)
 
+    def test_up_next_wraps_round_from_the_current_song(self):
+        p = self.player
+        p.order, p.index = ["1/a.flac", "1/b.flac", "1/c.flac"], 1
+        self.assertEqual(p.up_next("f:1"), ["1/b.flac", "1/c.flac", "1/a.flac"])
+        p.sessions["f:2"] = {"order": ["2/a.flac", "2/b.flac"], "index": 1}
+        self.assertEqual(p.up_next("f:2"), ["2/b.flac", "2/a.flac"])
+        self.assertIsNone(p.up_next("f:missing"))
+
     def test_playing_to_the_end_counts_even_if_never_checked_midway(self):
         self.player.target = 0.0
         self.player._check_play(ended=True)
@@ -111,3 +119,4 @@ class Tagged(unittest.TestCase):
             self.assertEqual(listed["a:Queen"]["kind"], "artist")
             self.assertEqual((listed["b:Jazz\tQueen"]["name"], listed["b:Jazz\tQueen"]["by"]), ("Jazz", "Queen"))
             self.assertEqual(listed["f:1"]["by"], "")
+            self.assertEqual(p.tracks_view("f:1")[0]["albumArtist"], "Queen")

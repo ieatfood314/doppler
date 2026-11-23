@@ -852,7 +852,8 @@ class Player:
         meta = self.library.get(track) or {}
         artist, title = core.split_title(track)
         return {"id": track, "title": meta.get("title") or title, "artist": meta.get("artist") or artist,
-                "album": meta.get("album", ""), "duration": meta.get("duration", 0),
+                "album": meta.get("album", ""), "albumArtist": meta.get("albumartist", ""),
+                "duration": meta.get("duration", 0),
                 "art": self.hub.art_url(track) if meta.get("art") and self.hub.base else ""}
 
     def _plays_of(self, track: str) -> list:
@@ -917,6 +918,19 @@ class Player:
             view["plays"], view["last"] = self._plays_of(track)
             out.append(view)
         return out
+
+    def up_next(self, playlist: str) -> list | None:
+        """A playlist's run from its current song, then round to the songs already played."""
+        if playlist == self.current and self.order:
+            order, index = self.order, self.index
+        else:
+            session = self.sessions.get(playlist)
+            if not session:
+                return None
+            order, index = session.get("order") or [], session.get("index", 0)
+        if not order or not 0 <= index < len(order):
+            return None
+        return order[index:] + order[:index]
 
     def recent_view(self, limit: int = 60) -> list:
         """The songs played last, newest first, with the folder each one plays from."""
@@ -990,6 +1004,8 @@ class Api(BaseHTTPRequestHandler):
                 return self._json({"error": "year is required"}, 400)
         if url.path == "/tracks":
             return self._json(player.call(player.tracks_view, unquote(query.get("playlist", "f:"))))
+        if url.path == "/up-next":
+            return self._json({"next": player.call(player.up_next, unquote(query.get("playlist", "")))})
         self._json({"error": "not found"}, 404)
 
     def do_POST(self):

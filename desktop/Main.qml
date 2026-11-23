@@ -61,9 +61,10 @@ Window {
     property var allTracks: []
     property string find: ""          // the search inside an open playlist
     property string sortBy: "default"
-    readonly property var sorts: [["default", ""], ["title", "Title"], ["artist", "Artist"], ["album", "Album"],
+    readonly property var sorts: [["default", ""], ["next", "Up next"], ["title", "Title"], ["artist", "Artist"], ["album", "Album"],
                                   ["most", "Most played"], ["least", "Least played"], ["recent", "Recently played"]]
     function sortName(key) {
+        if (key === "next") return nextTracks.length ? "Up next" : sortName("default")
         if (key === "default") return !plPage.pv ? "File order" : plPage.pv.kind === "custom" ? "Order added" : plPage.pv.kind === "folder" ? "File order" : "Album order"
         for (var i = 0; i < sorts.length; i++) if (sorts[i][0] === key) return sorts[i][1]
         return ""
@@ -147,8 +148,53 @@ Window {
     function hm(s) { var m = Math.floor((s || 0) / 60); return m >= 60 ? Math.floor(m / 60) + " h " + ("0" + (m % 60)).slice(-2) + " m" : m + " m" }
     function clock(s) { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2) }
     function view(id) { if (!st) return null; for (var i = 0; i < st.playlists.length; i++) if (st.playlists[i].id === id) return st.playlists[i]; return null }
-    function loadTracks(id) { call("GET", "/tracks?playlist=" + encodeURIComponent(id), null, function (d) { if (d) tracks = d }) }
-    function showPlaylist(id) { openPlaylist = id; libraryOpen = true; tracks = []; plFind.text = ""; loadTracks(id) }
+    function loadTracks(id) {
+        call("GET", "/tracks?playlist=" + encodeURIComponent(id), null, function (d) {
+            if (!d) return
+            tracks = d
+            // Like the phone, opening the playing playlist lands on its current song.
+            if (id === openPlaylist && st && st.playlist === id) Qt.callLater(function () {
+                var list = shown()
+                for (var i = 0; i < list.length; i++) if (st.track && list[i].id === st.track.id && i > 2) {
+                    trackList.positionViewAtIndex(i, ListView.Beginning)
+                    break
+                }
+            })
+        })
+    }
+    property var nextTracks: []
+    property int nextRequest: 0
+    function loadNext(id) {
+        var request = ++nextRequest
+        call("GET", "/up-next?playlist=" + encodeURIComponent(id), null, function (d) {
+            if (id === openPlaylist && request === nextRequest) nextTracks = d && d.next ? d.next : []
+        })
+    }
+    function showPlaylist(id) {
+        openPlaylist = id; libraryOpen = true; tracks = []; nextTracks = []
+        plPage.picked = []; plPage.choosing = false; plFind.text = ""
+        loadTracks(id); loadNext(id)
+    }
+    property string currentRun: st ? st.playlist + ":" + st.index : ""
+    onCurrentRunChanged: if (openPlaylist) loadNext(openPlaylist)
+    function artistFor(t) {
+        if (!st || !t) return null
+        for (var i = 0; i < st.playlists.length; i++) {
+            var p = st.playlists[i]
+            if (p.kind === "artist" && p.id !== trackMenu.playlist && p.name.toLowerCase() === (t.artist || "").toLowerCase()) return p
+        }
+        return null
+    }
+    function albumFor(t) {
+        if (!st || !t) return null
+        var by = t.albumArtist || t.artist || ""
+        for (var i = 0; i < st.playlists.length; i++) {
+            var p = st.playlists[i]
+            if (p.kind === "album" && p.id !== trackMenu.playlist && p.name.toLowerCase() === (t.album || "").toLowerCase()
+                    && (!p.by || !by || p.by.toLowerCase() === by.toLowerCase())) return p
+        }
+        return null
+    }
     property int playsRev: st ? st.playsRev || 0 : 0
     onPlaysRevChanged: {
         if (openPlaylist && (sortBy === "most" || sortBy === "least" || sortBy === "recent")) loadTracks(openPlaylist)
@@ -170,6 +216,10 @@ Window {
         }
         function text(a, b) { return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }) }
         var by = {
+            next: function (a, b) {
+                var ai = nextTracks.indexOf(a.t.id), bi = nextTracks.indexOf(b.t.id)
+                return (ai < 0 ? nextTracks.length : ai) - (bi < 0 ? nextTracks.length : bi)
+            },
             title: function (a, b) { return text(a.t.title, b.t.title) },
             artist: function (a, b) { return text(a.t.artist || "\uffff", b.t.artist || "\uffff") || text(a.t.album, b.t.album) },
             album: function (a, b) { return text(a.t.album || "\uffff", b.t.album || "\uffff") },
@@ -177,6 +227,7 @@ Window {
             least: function (a, b) { return (a.t.plays || 0) - (b.t.plays || 0) },
             recent: function (a, b) { return (b.t.last || 0) - (a.t.last || 0) }
         }[sortBy]
+        if (sortBy === "next" && !nextTracks.length) by = null
         if (by) list.sort(function (a, b) { return by(a, b) || a.i - b.i })
         return list.map(function (x) { return x.t })
     }
@@ -198,7 +249,7 @@ Window {
     Shortcut { sequence: "Left"; onActivated: act("/prev"); enabled: !wrap }
     Shortcut { sequences: ["Right", "Space", "Return"]; enabled: !!wrap; onActivated: wrapStep(1) }
     Shortcut { sequence: "Left"; enabled: !!wrap; onActivated: wrapStep(-1) }
-    Shortcut { sequence: "Escape"; onActivated: { if (wrap) wrap = null; else if (confirm.visible) confirm.visible = false; else if (openPlaylist && plFind.text) plFind.text = ""; else if (openPlaylist) openPlaylist = ""; else if (libraryOpen && search.text) search.text = ""; else if (libraryOpen) closeDrawer(); else win.close() } }
+    Shortcut { sequence: "Escape"; onActivated: { if (wrap) wrap = null; else if (confirm.visible) confirm.visible = false; else if (openPlaylist && plPage.pickMode) { plPage.picked = []; plPage.choosing = false } else if (openPlaylist && plFind.text) plFind.text = ""; else if (openPlaylist) openPlaylist = ""; else if (libraryOpen && search.text) search.text = ""; else if (libraryOpen) closeDrawer(); else win.close() } }
     Shortcut { sequence: "Ctrl+F"; onActivated: { if (openPlaylist) plFind.forceActiveFocus(); else { showDrawer("library"); search.forceActiveFocus() } } }
     Shortcut { sequence: "Ctrl+Q"; onActivated: win.close() }
 
@@ -222,9 +273,9 @@ Window {
     component Words: Text { color: starlight; font.family: sans.name; font.pixelSize: 15; elide: Text.ElideRight }
     component Pill: Rectangle {
         id: pill
-        property string label; property bool strong: false; property color tone: starlight
+        property string label; property bool strong: false; property bool compact: false; property color tone: starlight
         signal clicked()
-        implicitWidth: pillText.implicitWidth + 30; implicitHeight: 36; radius: 18
+        implicitWidth: pillText.implicitWidth + (compact ? 18 : 30); implicitHeight: compact ? 32 : 36; radius: height / 2
         color: strong ? Qt.rgba(tone.r, tone.g, tone.b, 0.14) : (pillMouse.containsMouse ? "#14121e" : "transparent")
         border.color: strong ? Qt.rgba(tone.r, tone.g, tone.b, 0.7) : hairline; border.width: 1
         Text { id: pillText; anchors.centerIn: parent; text: pill.label; color: pill.strong ? pill.tone : starlight; font.family: sans.name; font.pixelSize: 14; font.weight: Font.Medium }
@@ -256,28 +307,101 @@ Window {
         ToolTip.visible: tip !== "" && ibMouse.containsMouse; ToolTip.text: tip; ToolTip.delay: 600
     }
 
-    // One song in any list. Click plays it; right-click or the dots open its menu.
+    // The phone's transport glyphs: quiet previous/next buttons and a round play/pause button.
+    component Glyph: Rectangle {
+        id: glyph
+        property string mark: "play"
+        property string tip: ""
+        property bool big: false
+        property bool filled: false
+        property color tone: starlight
+        signal clicked()
+        width: big ? (filled ? 60 : 56) : 44; height: width; radius: width / 2
+        color: filled ? tone : (glyphMouse.containsMouse ? "#16131f" : "transparent")
+        border.color: filled ? tone : (big ? faint : (glyphMouse.containsMouse ? faint : "transparent"))
+        border.width: big || glyphMouse.containsMouse ? 1 : 0
+        Accessible.role: Accessible.Button; Accessible.name: tip
+        Canvas {
+            anchors.centerIn: parent; width: glyph.big ? 20 : 16; height: width
+            property string symbol: glyph.mark
+            property bool solid: glyph.filled
+            onSymbolChanged: requestPaint(); onSolidChanged: requestPaint()
+            onPaint: {
+                var c = getContext("2d"); c.reset()
+                c.fillStyle = glyph.filled ? "#000000" : starlight
+                c.strokeStyle = c.fillStyle; c.lineWidth = width * 0.14; c.lineCap = "round"
+                var w = width, h = height
+                if (glyph.mark === "play" || glyph.mark === "next" || glyph.mark === "prev") {
+                    var reverse = glyph.mark === "prev"
+                    c.beginPath()
+                    c.moveTo(reverse ? w : (glyph.mark === "play" ? w * 0.15 : 0), 0)
+                    c.lineTo(reverse ? w * 0.25 : w * (glyph.mark === "play" ? 1 : 0.75), h / 2)
+                    c.lineTo(reverse ? w : (glyph.mark === "play" ? w * 0.15 : 0), h)
+                    c.closePath(); c.fill()
+                    if (glyph.mark !== "play") {
+                        c.beginPath(); c.moveTo(reverse ? w * 0.1 : w * 0.9, 0)
+                        c.lineTo(reverse ? w * 0.1 : w * 0.9, h); c.stroke()
+                    }
+                } else {
+                    var bar = w * 0.28
+                    c.fillRect(w * 0.1, 0, bar, h); c.fillRect(w * 0.9 - bar, 0, bar, h)
+                }
+            }
+        }
+        MouseArea { id: glyphMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: glyph.clicked() }
+        ToolTip.visible: tip !== "" && glyphMouse.containsMouse; ToolTip.text: tip; ToolTip.delay: 600
+    }
+
+    component KeyToggle: Rectangle {
+        id: keyToggle
+        property string slot: "1"
+        property bool on: false
+        signal clicked()
+        width: 42; height: 42; radius: 21
+        color: on ? Qt.rgba(slotColor(slot).r, slotColor(slot).g, slotColor(slot).b, 0.16) : (keyMouse.containsMouse ? "#16131f" : "transparent")
+        border.color: on ? slotColor(slot) : hairline
+        DotNumeral { anchors.centerIn: parent; height: 16; digit: keyToggle.slot; tone: keyToggle.on ? slotColor(keyToggle.slot) : dust }
+        MouseArea { id: keyMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+            enabled: !keyToggle.on; onClicked: keyToggle.clicked() }
+        Accessible.role: Accessible.Button; Accessible.name: on ? "On key " + slot : "Put on key " + slot
+    }
+
+    // One song in any list. Click plays it; right-click or the dots open its menu. Press and hold picks it.
     component TrackRow: Item {
         id: row
         property var track
         property bool current: false
+        property bool picked: false
+        property bool pickMode: false
         property string note: ""
         property string playlist: ""   // the playlist it's listed in, "" for search and recent
         signal play()
+        signal pick()
         width: ListView.view ? ListView.view.width : 300; height: 48
-        Rectangle { anchors.fill: parent; radius: 10; color: rowArea.containsMouse ? "#0f0d18" : "transparent" }
-        Rectangle { visible: row.current; width: 7; height: 7; radius: 3.5; color: starlight; anchors { left: parent.left; leftMargin: 6; verticalCenter: parent.verticalCenter } }
+        Rectangle { anchors.fill: parent; radius: 10; color: row.picked ? panel : (rowArea.containsMouse ? "#0f0d18" : "transparent") }
+        Rectangle { visible: row.current || row.picked; width: 7; height: 7; radius: 3.5; color: row.current ? starlight : "transparent"
+            border.color: starlight; border.width: row.picked && !row.current ? 1 : 0
+            anchors { left: parent.left; leftMargin: 6; verticalCenter: parent.verticalCenter } }
         Column { anchors { left: parent.left; right: noteText.left; leftMargin: 22; rightMargin: 10; verticalCenter: parent.verticalCenter }
             Words { width: parent.width; text: row.track ? row.track.title : "" }
             Words { width: parent.width; color: faint; font.pixelSize: 12
                 text: row.track ? [row.track.artist, row.track.album].filter(function (s) { return s }).join(", ") : "" } }
         Words { id: noteText; anchors { right: more.left; rightMargin: 4; verticalCenter: parent.verticalCenter }
-            color: faint; font.pixelSize: 12; text: row.note }
+            color: faint; font.pixelSize: 12
+            text: row.note || (row.track && row.track.duration ? clock(row.track.duration) : "") }
         MouseArea { id: rowArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; acceptedButtons: Qt.LeftButton | Qt.RightButton
-            onClicked: function (e) { if (e.button === Qt.RightButton) trackMenu.open_(row.track, row.playlist); else row.play() } }
-        IconButton { id: more; mark: "more"; tip: "More"; anchors { right: parent.right; verticalCenter: parent.verticalCenter }
+            property bool held: false
+            onPressed: held = false
+            onClicked: function (e) {
+                if (held) { held = false; return }
+                if (e.button === Qt.RightButton && !row.pickMode) trackMenu.open_(row.track, row.playlist)
+                else if (row.pickMode) row.pick(); else row.play()
+            }
+            onPressAndHold: { held = true; row.pick() } }
+        IconButton { id: more; mark: "more"; tip: "More for " + (row.track ? row.track.title : "song"); visible: !row.pickMode
+            anchors { right: parent.right; verticalCenter: parent.verticalCenter }
             opacity: rowArea.containsMouse || trackMenu.visible && trackMenu.track === row.track ? 1 : 0.35
-            onClicked: trackMenu.open_(row.track, row.playlist) }
+            onClicked: trackMenu.open_(row.track, row.playlist, more) }
     }
 
     // ------------------------------------------------------------ wavefronts
@@ -414,31 +538,28 @@ Window {
     Item {
         id: nowPlaying
         anchors { left: parent.left; right: drawer.left; bottom: footer.top; leftMargin: 28; rightMargin: 28 }
-        height: st && st.track ? 118 : 0
+        height: st && st.track ? 148 : 0
         visible: height > 0
         property var tr: st ? st.track : null
         property real dur: tr && tr.duration ? tr.duration : 0
         property color tone: { if (!st) return starlight; for (var k in st.slots) if (st.slots[k] === st.playlist) return slotColor(k); return starlight }
-        Text { id: npTitle; anchors { left: parent.left; right: controls.left; top: parent.top; rightMargin: 20 }
+        Text { id: npTitle; anchors { left: parent.left; right: npMore.left; top: parent.top; rightMargin: 12 }
             elide: Text.ElideRight
             text: nowPlaying.tr ? nowPlaying.tr.title : ""; color: starlight
             font.family: sans.name; font.pixelSize: 26; font.weight: Font.Medium
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; enabled: st && st.playlist; onClicked: showPlaylist(st.playlist) } }
-        Words { anchors { left: parent.left; right: controls.left; top: npTitle.bottom; rightMargin: 20 }
+        Words { anchors { left: parent.left; right: npMore.left; top: npTitle.bottom; rightMargin: 12 }
             color: dust; font.pixelSize: 14
             text: nowPlaying.tr ? [nowPlaying.tr.artist, st.playlistName].filter(function (s) { return s }).join(", from ") : "" }
-        Row {
-            id: controls; anchors { right: parent.right; top: parent.top; topMargin: 4 }
-            spacing: 10
-            Pill { label: "Previous"; onClicked: act("/prev") }
-            Pill { label: st && st.playing ? "Pause" : "Play"; strong: true; tone: nowPlaying.tone; onClicked: act("/toggle") }
-            Pill { label: "Next"; onClicked: act("/next") }
-        }
+        IconButton { id: npMore; mark: "more"; tip: nowPlaying.tr ? "More for " + nowPlaying.tr.title : "More"
+            anchors { right: parent.right; top: parent.top; topMargin: 2 }
+            onClicked: trackMenu.open_(nowPlaying.tr, st.playlist, npMore) }
         Canvas {
             id: spectrum
             anchors { left: parent.left; right: parent.right; bottom: times.top; bottomMargin: 2 }
             height: 30
-            property real frac: nowPlaying.dur > 0 ? Math.min(1, position() / nowPlaying.dur) : 0
+            property real dragging: -1
+            property real frac: dragging >= 0 ? dragging : (nowPlaying.dur > 0 ? Math.min(1, position() / nowPlaying.dur) : 0)
             onFracChanged: requestPaint(); onWidthChanged: requestPaint()
             property color tone: nowPlaying.tone
             onToneChanged: requestPaint()
@@ -450,17 +571,32 @@ Window {
                 var mid = height / 2, band = 4, played = width * frac, t = nowPlaying.tone
                 c.fillStyle = hairline; c.fillRect(0, mid - band / 2, width, band)
                 c.fillStyle = t; c.fillRect(0, mid - band / 2, played, band)
-                c.fillStyle = Qt.rgba(t.r, t.g, t.b, 0.22); c.beginPath(); c.arc(played, mid, 9, 0, Math.PI * 2); c.fill()
+                c.fillStyle = Qt.rgba(t.r, t.g, t.b, 0.22); c.beginPath(); c.arc(played, mid, dragging >= 0 ? 12 : 9, 0, Math.PI * 2); c.fill()
                 c.fillStyle = t; c.beginPath(); c.arc(played, mid, 5, 0, Math.PI * 2); c.fill()
             }
-            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                onClicked: function (e) { if (nowPlaying.dur > 0) act("/seek", { position: e.x / width * nowPlaying.dur }) } }
+            MouseArea {
+                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                function move(x) { spectrum.dragging = Math.max(0, Math.min(1, x / width)) }
+                onPressed: function (e) { if (nowPlaying.dur > 0) move(e.x) }
+                onPositionChanged: function (e) { if (pressed && nowPlaying.dur > 0) move(e.x) }
+                onReleased: function (e) {
+                    if (nowPlaying.dur > 0 && spectrum.dragging >= 0) act("/seek", { position: spectrum.dragging * nowPlaying.dur })
+                    spectrum.dragging = -1
+                }
+                onCanceled: spectrum.dragging = -1
+            }
         }
         Item {
             id: times; anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
-            height: 18
-            Words { anchors.left: parent.left; color: faint; font.pixelSize: 12; text: clock(position()) }
-            Words { anchors.right: parent.right; color: faint; font.pixelSize: 12; text: clock(nowPlaying.dur) }
+            height: 56
+            Words { anchors { left: parent.left; verticalCenter: parent.verticalCenter } color: faint; font.pixelSize: 12; text: clock(spectrum.dragging >= 0 ? spectrum.dragging * nowPlaying.dur : position()) }
+            Row {
+                id: controls; anchors.centerIn: parent; spacing: 12
+                Glyph { mark: "prev"; tip: "Previous"; onClicked: act("/prev") }
+                Glyph { big: true; mark: st && st.playing ? "pause" : "play"; tip: st && st.playing ? "Pause" : "Play"; onClicked: act("/toggle") }
+                Glyph { mark: "next"; tip: "Next"; onClicked: act("/next") }
+            }
+            Words { anchors { right: parent.right; verticalCenter: parent.verticalCenter } color: faint; font.pixelSize: 12; text: clock(nowPlaying.dur) }
         }
     }
 
@@ -480,7 +616,7 @@ Window {
             Pill { visible: wrapNow > 0; label: "Your " + wrapNow; strong: true; onClicked: openWrapped(wrapNow) }
         }
         Words { anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-            color: faint; font.pixelSize: 12
+            visible: win.width - drawer.width > 500; color: faint; font.pixelSize: 12
             text: "1 and 2 play, space pauses, arrows skip" }
     }
 
@@ -617,6 +753,7 @@ Window {
                         Connections { target: win; function onListenMonthChanged() { chart.requestPaint() } }
                         onPaint: {
                             var c = getContext("2d"); c.reset()
+                            if (width <= 0 || height <= 0) return
                             var col = width / 12, pitch = Math.min(col * 0.5, height / rows), top = Math.max.apply(null, values)
                             for (var i = 0; i < 12; i++) {
                                 var v = values[i], lit = v > 0 && top > 0 ? Math.max(1, Math.round(v / top * rows)) : 0
@@ -680,6 +817,14 @@ Window {
             visible: openPlaylist !== ""
             property var pv: view(openPlaylist)
             property bool custom: !!pv && pv.kind === "custom"
+            property var picked: []
+            property bool choosing: false
+            readonly property bool pickMode: choosing || picked.length > 0
+            function togglePick(id) {
+                var p = picked.slice(), at = p.indexOf(id)
+                if (at >= 0) p.splice(at, 1); else p.push(id)
+                picked = p
+            }
             Text { id: plTitle; width: parent.width; elide: Text.ElideRight
                 visible: !(plPage.custom && renameField.activeFocus)
                 text: plPage.pv ? plPage.pv.name : ""; color: starlight; font.family: sans.name; font.pixelSize: 32; font.weight: Font.Medium
@@ -691,18 +836,25 @@ Window {
             Words { id: plSub; anchors.top: plTitle.bottom; color: dust; font.pixelSize: 13; width: parent.width
                 text: !plPage.pv ? "" : counted(plPage.pv.count) + (plPage.pv.mode === "order" ? ", in order" : ", shuffled")
                     + (plPage.custom ? ", made by you" : plPage.pv.kind === "folder" ? ", the folder " + plPage.pv.path : plPage.pv.by ? ", by " + plPage.pv.by : "") }
-            Flow {
+            Item {
                 id: plActions; anchors { top: plSub.bottom; left: parent.left; right: parent.right; topMargin: 12 }
-                spacing: 8
-                Pill { property bool here: st && st.playing && st.playlist === openPlaylist
-                    label: here ? "Pause" : "Play"; strong: true
+                height: 60
+                Glyph { id: plPlay; big: true; filled: true; anchors.left: parent.left
+                    property bool here: st && st.playing && st.playlist === openPlaylist
+                    mark: here ? "pause" : "play"; tip: here ? "Pause" : "Play"
                     tone: plPage.pv && plPage.pv.slot ? slotColor(plPage.pv.slot) : starlight
                     onClicked: { if (here) act("/toggle"); else act("/play", { playlist: openPlaylist }) } }
-                Pill { label: plPage.pv && plPage.pv.mode === "order" ? "From the top" : "Reshuffle"; onClicked: act("/play", { playlist: openPlaylist, fresh: true }) }
-                Repeater { model: ["1", "2"]
-                    Pill { required property string modelData; property bool on: plPage.pv && plPage.pv.slot === modelData
-                        label: on ? "On key " + modelData : "Put on key " + modelData; strong: on; tone: slotColor(modelData)
-                        onClicked: { if (on) return; var b = {}; b[modelData] = openPlaylist; hub("PUT", "/api/slots", b) } } }
+                Words { anchors { left: plPlay.right; leftMargin: 10; verticalCenter: parent.verticalCenter }
+                    text: plPage.pv && plPage.pv.mode === "order" ? "From the top" : "Reshuffle"
+                    font.weight: Font.Medium; font.underline: reshuffleMouse.containsMouse
+                    MouseArea { id: reshuffleMouse; anchors.fill: parent; anchors.margins: -8; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: act("/play", { playlist: openPlaylist, fresh: true }) } }
+                Row {
+                    anchors { right: parent.right; verticalCenter: parent.verticalCenter } spacing: 8
+                    Repeater { model: ["1", "2"]
+                        KeyToggle { required property string modelData; slot: modelData; on: plPage.pv && plPage.pv.slot === modelData
+                            onClicked: { var b = {}; b[modelData] = openPlaylist; hub("PUT", "/api/slots", b) } } }
+                }
             }
             Rectangle {
                 id: plFindBox; anchors { top: plActions.bottom; left: parent.left; right: sortPill.left; topMargin: 14; rightMargin: 8 }
@@ -715,17 +867,54 @@ Window {
                 label: sortName(sortBy); onClicked: sortMenu.popup(sortPill, 0, sortPill.height + 4) }
             Words { id: noMatch; anchors { top: plFindBox.bottom; left: parent.left; topMargin: 16; leftMargin: 4 }
                 visible: find !== "" && trackList.count === 0; color: dust; text: "Nothing here matches that" }
+            Words { anchors { top: plFindBox.bottom; left: parent.left; topMargin: 16 }
+                visible: tracks.length === 0; color: dust
+                text: plPage.custom ? "Empty. Find songs in All music and add them here."
+                    : plPage.pv && plPage.pv.kind === "folder" ? "No music in this folder" : "No music left here" }
             ListView {
                 id: trackList
-                anchors { top: plFindBox.bottom; left: parent.left; right: parent.right; bottom: parent.bottom; topMargin: 8 }
-                clip: true; model: { find; sortBy; return shown() }
+                anchors { top: plFindBox.bottom; left: parent.left; right: parent.right; bottom: parent.bottom; topMargin: 8; bottomMargin: plPage.pickMode ? 72 : 0 }
+                clip: true; model: { find; sortBy; nextTracks; return shown() }
                 delegate: TrackRow {
                     required property var modelData
                     track: modelData; playlist: openPlaylist
                     current: st && st.track && st.track.id === modelData.id && st.playlist === openPlaylist
+                    picked: plPage.picked.indexOf(modelData.id) >= 0; pickMode: plPage.pickMode
                     note: sortBy === "most" || sortBy === "least" ? (modelData.plays ? modelData.plays + (modelData.plays === 1 ? " play" : " plays") : "Not played")
-                        : sortBy === "recent" ? ago(modelData.last) : clock(modelData.duration)
+                        : sortBy === "recent" ? ago(modelData.last) : ""
                     onPlay: act("/play", { playlist: openPlaylist, track: modelData.id })
+                    onPick: plPage.togglePick(modelData.id)
+                }
+            }
+            Rectangle {
+                id: pickBar
+                visible: plPage.pickMode; anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                height: 64; radius: 20; color: panel; border.color: hairline; z: 2
+                readonly property bool tight: width < 340
+                Row {
+                    anchors { fill: parent; margins: pickBar.tight ? 8 : 10; leftMargin: pickBar.tight ? 10 : 16 }
+                    spacing: pickBar.tight ? 5 : 8
+                    Words { anchors.verticalCenter: parent.verticalCenter; width: Math.min(implicitWidth, pickBar.tight ? 52 : 90)
+                        font.pixelSize: pickBar.tight ? 13 : 15
+                        text: plPage.picked.length ? plPage.picked.length + " picked" : "Pick songs" }
+                    Item { width: 1; height: 1 }
+                    Pill { visible: plPage.picked.length === 0; label: "Cancel"; compact: pickBar.tight; onClicked: plPage.choosing = false }
+                    Pill { visible: plPage.picked.length > 0 && plPage.custom; label: "Remove"; compact: pickBar.tight
+                        onClicked: {
+                            hub("PUT", "/api/playlists/" + openPlaylist, { remove: plPage.picked }, function () { loadTracks(openPlaylist) })
+                            plPage.picked = []; plPage.choosing = false
+                        } }
+                    Pill { visible: plPage.picked.length > 0; label: "Delete"; tone: red; compact: pickBar.tight
+                        onClicked: {
+                            var ids = plPage.picked.slice()
+                            confirm.ask(ids.length === 1 ? "Delete 1 song?" : "Delete " + ids.length + " songs?",
+                                "The files go to the hub's trash, and off every device.", "Delete", function () {
+                                    plPage.picked = []; plPage.choosing = false
+                                    hub("POST", "/api/tracks/delete", { tracks: ids }, function (r) { if (r && r.ok) toast.show("Deleted " + ids.length + (ids.length === 1 ? " song" : " songs")) })
+                                })
+                        } }
+                    Pill { visible: plPage.picked.length > 0; label: pickBar.tight ? "Add" : "Add to playlist"; strong: true; compact: pickBar.tight
+                        onClicked: { addMenu.trackIds = plPage.picked.slice(); addMenu.popup() } }
                 }
             }
         }
@@ -759,18 +948,32 @@ Window {
         property var track: null
         property string playlist: ""
         property bool custom: { var p = view(playlist); return !!p && p.kind === "custom" }
-        function open_(t, pl) { track = t; playlist = pl || ""; popup() }
+        property var artist: artistFor(track)
+        property var album: albumFor(track)
+        function open_(t, pl, anchor) {
+            track = t; playlist = pl || ""
+            if (anchor) popup(anchor, anchor.width - width, anchor.height + 4)
+            else popup()
+        }
         background: Rectangle { implicitWidth: 230; color: panel; border.color: hairline; radius: 10 }
         MenuItem { contentItem: Text { text: "Play"; color: starlight; font.family: sans.name; font.pixelSize: 14 }
             background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
             onTriggered: act("/play", { playlist: trackMenu.playlist || folderOf(trackMenu.track.id), track: trackMenu.track.id }) }
         MenuItem { contentItem: Text { text: "Add to playlist"; color: starlight; font.family: sans.name; font.pixelSize: 14 }
             background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
-            onTriggered: { addMenu.trackId = trackMenu.track.id; addMenu.popup() } }
+            onTriggered: { addMenu.trackIds = [trackMenu.track.id]; addMenu.popup() } }
         MenuItem { visible: trackMenu.custom; height: visible ? implicitHeight : 0
             contentItem: Text { text: "Remove from this playlist"; color: starlight; font.family: sans.name; font.pixelSize: 14 }
             background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
             onTriggered: hub("PUT", "/api/playlists/" + trackMenu.playlist, { remove: [trackMenu.track.id] }, function () { loadTracks(openPlaylist) }) }
+        MenuItem { visible: !!trackMenu.artist; height: visible ? implicitHeight : 0
+            contentItem: Text { text: trackMenu.artist ? "Go to " + trackMenu.artist.name : ""; color: starlight; font.family: sans.name; font.pixelSize: 14 }
+            background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
+            onTriggered: showPlaylist(trackMenu.artist.id) }
+        MenuItem { visible: !!trackMenu.album; height: visible ? implicitHeight : 0
+            contentItem: Text { text: "Go to the album"; color: starlight; font.family: sans.name; font.pixelSize: 14 }
+            background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
+            onTriggered: showPlaylist(trackMenu.album.id) }
         MenuItem { contentItem: Text { text: "Delete from library"; color: red; font.family: sans.name; font.pixelSize: 14 }
             background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
             onTriggered: {
@@ -787,6 +990,10 @@ Window {
         MenuItem { contentItem: Text { text: plPage.pv && plPage.pv.mode === "order" ? "Shuffle it" : "Play in order"; color: starlight; font.family: sans.name; font.pixelSize: 14 }
             background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
             onTriggered: hub("PUT", "/api/mode", { playlist: openPlaylist, mode: plPage.pv.mode === "order" ? "shuffle" : "order" }) }
+        MenuItem { visible: tracks.length > 0; height: visible ? implicitHeight : 0
+            contentItem: Text { text: "Pick songs"; color: starlight; font.family: sans.name; font.pixelSize: 14 }
+            background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
+            onTriggered: plPage.choosing = true }
         MenuItem { visible: plPage.custom; height: visible ? implicitHeight : 0
             contentItem: Text { text: "Rename"; color: starlight; font.family: sans.name; font.pixelSize: 14 }
             background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
@@ -802,27 +1009,28 @@ Window {
 
     Menu {
         id: addMenu
-        property string trackId
+        property var trackIds: []
+        function finish() { if (plPage.pickMode) { plPage.picked = []; plPage.choosing = false } }
         background: Rectangle { implicitWidth: 220; color: panel; border.color: hairline; radius: 10 }
         Instantiator {
             model: st ? st.playlists.filter(function (p) { return p.kind === "custom" }) : []
             delegate: MenuItem { required property var modelData; text: modelData.name
                 contentItem: Text { text: modelData.name; color: starlight; font.family: sans.name; font.pixelSize: 14 }
                 background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
-                onTriggered: hub("PUT", "/api/playlists/" + modelData.id, { add: [addMenu.trackId] }) }
+                onTriggered: { hub("PUT", "/api/playlists/" + modelData.id, { add: addMenu.trackIds }); addMenu.finish() } }
             onObjectAdded: function (i, o) { addMenu.insertItem(i, o) }
             onObjectRemoved: function (i, o) { addMenu.removeItem(o) }
         }
         MenuItem { contentItem: Text { text: "A new playlist"; color: dust; font.family: sans.name; font.pixelSize: 14 }
             background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
-            onTriggered: hub("POST", "/api/playlists", { name: "New playlist", tracks: [addMenu.trackId] }) }
+            onTriggered: { hub("POST", "/api/playlists", { name: "New playlist", tracks: addMenu.trackIds }); addMenu.finish() } }
     }
 
     Menu {
         id: sortMenu
         background: Rectangle { implicitWidth: 200; color: panel; border.color: hairline; radius: 10 }
         Repeater {
-            model: sorts
+            model: nextTracks.length ? sorts : sorts.filter(function (s) { return s[0] !== "next" })
             MenuItem { required property var modelData
                 contentItem: Text { text: sortName(modelData[0]); color: sortBy === modelData[0] ? starlight : dust; font.family: sans.name; font.pixelSize: 14
                     font.weight: sortBy === modelData[0] ? Font.Medium : Font.Normal }

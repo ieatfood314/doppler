@@ -53,7 +53,7 @@ On the phone, tap a big numeral to play or pause it, and tap the name beside it 
 
 Every song has a **⋯** button: add it to a playlist, take it out of the one it's in, go to its artist or album, or delete it from the library. Deleting moves the file to the hub's trash (empty that to get the space back, or restore it from there), and if the music folder is shared with Syncthing the copies on your other devices go too. To do several at once, long-press songs to pick them.
 
-In the window it's the same: click a numeral to play, its name to open the playlist, and **All music** or **Recent** at the bottom to open the side panel (the × in its corner or Esc closes it). Right-click a song, or use its **⋯**, for the same menu as on the phone. The search on the Artists or Albums tab looks through that list alone.
+In the window it's the same: click a numeral to play, its name to open the playlist, and **All music** or **Recent** at the bottom to open the side panel (the × in its corner or Esc closes it). Right-click a song, or use its **⋯**, for the same menu as on the phone; the playing song has one too. Playlists can show **Up next**, and **Pick songs** or a press-and-hold selects several to add, remove or delete together. The search on the Artists or Albums tab looks through that list alone.
 
 On a computer:
 

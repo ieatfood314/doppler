@@ -131,6 +131,7 @@ class Engine private constructor(private val context: Context) {
     private var current: String? = store.current
     private var order: List<String> = emptyList()
     private var playing = false
+    private var currentYielded = false
     private var claimedAt = 0.0
     private var hubOffset = 0.0
     private var hubOnline = false
@@ -747,6 +748,26 @@ class Engine private constructor(private val context: Context) {
     fun next() = step(1)
     fun previous() = step(-1)
 
+    private fun ownsCurrent(): Boolean {
+        if (playing) return true
+        if (currentYielded) return false
+        val playlist = current ?: return false
+        return hubState?.sessions?.get(playlist)?.device == store.device
+    }
+
+    /** Whether this song belongs to a loaded run this phone can save. */
+    fun canPlayNext(id: String) = current != null && starting == null && ownsCurrent() && player.mediaItemCount > 0 &&
+        player.mediaItemCount == order.size && id in order
+
+    /** Put a song immediately after the one that's on, without starting it or disturbing the current song. */
+    fun playNext(id: String) {
+        if (current == null || starting != null || !ownsCurrent() || player.mediaItemCount == 0 || player.mediaItemCount != order.size) return
+        val move = playNextMove(order, player.currentMediaItemIndex, id) ?: return
+        order = move.order
+        player.moveMediaItem(move.from, move.to)
+        report()
+    }
+
     private fun step(by: Int) {
         val playlist = current ?: return
         if (player.mediaItemCount == 0 || !playing) {
@@ -813,6 +834,7 @@ class Engine private constructor(private val context: Context) {
     }
 
     private fun fresh() {
+        currentYielded = false
         claimedAt = hubNow()
         say("")
         failures = 0
@@ -918,6 +940,7 @@ class Engine private constructor(private val context: Context) {
     private fun yieldTo(device: String) {
         Log.i(TAG, "yielding to $device")
         playing = false
+        currentYielded = true
         player.pause()
         current?.let { c -> sessions[c]?.let { sessions[c] = it.copy(unsent = false, playing = false) }; outbox.remove(c) }
         store.saveOutbox(outbox)

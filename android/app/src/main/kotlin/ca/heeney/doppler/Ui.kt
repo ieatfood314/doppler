@@ -734,8 +734,8 @@ private fun hoursMinutes(seconds: Long): String {
     return if (m >= 60) "%d h %02d m".format(m / 60, m % 60) else "$m m"
 }
 
-/** Everything you can do to one song: add it to a playlist, take it out of this one, go to its
- * artist or album, or delete it from the library. */
+/** Everything you can do to one song: play it next, add it to a playlist, take it out of this one,
+ * go to its artist or album, or delete it from the library. */
 @Composable
 private fun TrackMenu(engine: Engine, state: UiState, t: Track, playlist: String?, open: (Screen) -> Unit, dismiss: () -> Unit) {
     var step by remember(t.id) { mutableStateOf("menu") }
@@ -751,6 +751,7 @@ private fun TrackMenu(engine: Engine, state: UiState, t: Track, playlist: String
             val sub = listOf(t.artist, t.album).filter { it.isNotEmpty() }.joinToString(", ")
             if (sub.isNotEmpty()) Text(sub, color = Palette.Dust, size = 14, maxLines = 1)
             Spacer(Modifier.height(10.dp))
+            if (engine.canPlayNext(t.id)) SheetItem("Play next") { engine.playNext(t.id); dismiss() }
             SheetItem("Add to playlist") { step = "add" }
             if (view?.custom == true) SheetItem("Remove from ${view.name}") {
                 engine.hubEdit("PUT", "/api/playlists/${view.id}", JSONObject().put("remove", JSONArray(listOf(t.id))))
@@ -830,7 +831,7 @@ private fun PlaylistPage(engine: Engine, state: UiState, id: String, open: (Scre
     var sort by remember { mutableStateOf(engine.store.sort) }
     var choosingSort by remember { mutableStateOf(false) }
     val q = find.trim().lowercase()
-    val next = remember(id, state.playlist, state.index, state.count) { engine.upNext(id) }
+    val next = engine.upNext(id)
     val sorts = if (next != null) SORTS else SORTS - "next"
     val sorting = sort.takeIf { it in sorts } ?: "default"
     val shown = remember(tracks, q, sorting, state.playsRev, next) {

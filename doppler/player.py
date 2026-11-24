@@ -105,6 +105,7 @@ class Player:
         self.order: list[str] = []
         self.index = 0
         self.playing = False
+        self.current_yielded = False
         self.paused_at: float | None = None
         self.claimed_at = 0.0
         self.started = False
@@ -485,6 +486,7 @@ class Player:
         """Another device has started playing: stop here, quietly, and leave its session alone."""
         self._tally()
         self.playing = False
+        self.current_yielded = True
         self._heard = None
         self.paused_at = time.monotonic()
         try:
@@ -510,6 +512,48 @@ class Player:
             session["unsent"] = False
 
     # --- playing
+
+    def _owns_current(self) -> bool:
+        if self.playing:
+            return True
+        if self.current_yielded:
+            return False
+        if not self.hub.base:
+            return True
+        remote = (self.hub_state or {}).get("sessions", {}).get(self.current)
+        if remote:
+            return remote.get("device") == self.device
+        local = self.sessions.get(self.current) or {}
+        return local.get("device") == self.device
+
+    def _can_play_next(self) -> bool:
+        if not self.current or not self.order or not 0 <= self.index < len(self.order) or not self._owns_current():
+            return False
+        try:
+            return self.mpv.alive() and self.mpv.get("playlist-count") == len(self.order)
+        except RuntimeError:
+            return False
+
+    def play_next(self, track: str):
+        """Put a song after the current one without interrupting it, and save the changed run."""
+        if not self._owns_current():
+            return {"ok": False, "error": "the current run is playing elsewhere"}
+        if not self._can_play_next():
+            return {"ok": False, "error": "there's no current run on this computer"}
+        current = self.order[self.index]
+        source = self.order.index(track) if track in self.order else -1
+        if source < 0 or source in (self.index, self.index + 1):
+            return {"ok": True}
+        # Moving an earlier song shifts the current one down a place first.
+        destination = self.index if source < self.index else self.index + 1
+        order = self.order.copy()
+        order.insert(destination, order.pop(source))
+        # mpv targets the entry at the destination before removing the source, so it shifts when moving forward.
+        self.mpv.command("playlist-move", source, destination + (1 if source < destination else 0))
+        self.order = order
+        self.index = order.index(current)
+        self._report()
+        return {"ok": True}
 
     def _fetch_session(self, playlist: str):
         """The hub's view of a playlist, or None when it can't be reached in time."""
@@ -580,6 +624,7 @@ class Player:
             self.bump()
             return {"ok": False, "error": str(error)}
         self.playing = True
+        self.current_yielded = False
         self.paused_at = None
         self.message = ""
         self.claimed_at = self.hub_now()
@@ -906,6 +951,7 @@ class Player:
             "playing": self.playing, "playlist": self.current or "",
             "playlistName": core.playlist_name(self.current, custom) if self.current else "",
             "track": self._track_view(track), "index": self.index, "count": len(self.order),
+            "run": self.order, "orderHash": core.order_hash(self.order), "playNext": self._can_play_next(),
             "position": self.position(), "at": time.time(),
             "slots": slots, "playlists": out, "elsewhere": elsewhere, "message": self.message,
             "libraryCount": len(self.library), "playsRev": self.plays_rev,
@@ -1021,6 +1067,8 @@ class Api(BaseHTTPRequestHandler):
             if path == "/play":
                 return self._json(player.call(player.play, str(body.get("playlist", "")), body.get("track"),
                                               bool(body.get("fresh"))))
+            if path == "/play-next":
+                return self._json(player.call(player.play_next, str(body.get("track", ""))))
             if path == "/next":
                 return self._json(player.call(player.step, 1))
             if path == "/prev":

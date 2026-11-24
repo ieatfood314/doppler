@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from unittest import mock
 
 from doppler.player import Player
 
@@ -98,6 +99,82 @@ class Counting(unittest.TestCase):
         again.library = self.player.library
         views = {v["id"]: v for v in again.tracks_view("f:1")}
         self.assertEqual((views["1/a.flac"]["plays"], views["1/b.flac"]["plays"]), (1, 0))
+
+
+class PlayNext(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        config = {"hub": "", "device": "desk", "root": "", "eq": {}, "port": 0}
+        self.player = Player(config, self.dir.name + "/state", self.dir.name + "/run")
+        p = self.player
+        p.current, p.order, p.index, p.playing = "f:1", ["a", "b", "c", "d"], 1, True
+        p.target = 12.0
+        p.mpv.alive = mock.Mock(return_value=True)
+        p.mpv.get = mock.Mock(return_value=4)
+        p.mpv.command = mock.Mock()
+        self.report = p._report
+        p._report = mock.Mock()
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_later_track_moves_next_without_moving_the_current_song(self):
+        self.assertEqual(self.player.play_next("d"), {"ok": True})
+        p = self.player
+        self.assertEqual((p.order, p.index, p.target), (["a", "b", "d", "c"], 1, 12.0))
+        p.mpv.command.assert_called_once_with("playlist-move", 3, 2)
+        p._report.assert_called_once_with()
+        self.assertEqual(p.up_next("f:1"), ["b", "d", "c", "a"])
+        view = p.view()
+        self.assertEqual((view["run"], view["playNext"]), (p.order, True))
+        self.assertEqual(len(view["orderHash"]), 12)
+
+    def test_earlier_track_moves_next_and_keeps_the_current_index_on_the_same_song(self):
+        p = self.player
+        p.index = 2
+        self.assertEqual(p.play_next("a"), {"ok": True})
+        self.assertEqual((p.order, p.index), (["b", "c", "a", "d"], 1))
+        self.assertEqual(p.order[p.index], "c")
+        # mpv targets the entry currently at index 3; after the removal, that puts "a" at final index 2.
+        p.mpv.command.assert_called_once_with("playlist-move", 0, 3)
+
+    def test_earlier_track_can_move_after_the_last_current_song(self):
+        p = self.player
+        p.index = 3
+        self.assertEqual(p.play_next("a"), {"ok": True})
+        self.assertEqual((p.order, p.index), (["b", "c", "d", "a"], 2))
+        p.mpv.command.assert_called_once_with("playlist-move", 0, 4)
+
+    def test_changed_run_is_saved_for_a_restart(self):
+        p = self.player
+        p._report = self.report
+        self.assertEqual(p.play_next("d"), {"ok": True})
+        again = Player(p.config, self.dir.name + "/state", self.dir.name + "/run")
+        self.assertEqual(again.sessions["f:1"]["order"], ["a", "b", "d", "c"])
+        self.assertEqual(again.sessions["f:1"]["index"], 1)
+
+    def test_current_next_and_missing_songs_are_noops(self):
+        p = self.player
+        for track in ("b", "c", "missing"):
+            self.assertEqual(p.play_next(track), {"ok": True})
+        p.mpv.command.assert_not_called()
+        p._report.assert_not_called()
+
+    def test_a_paused_offline_run_keeps_its_local_ownership(self):
+        p = self.player
+        p.playing = False
+        p.hub.base = "http://hub.invalid"
+        p.sessions[p.current] = {"device": "desk"}
+        self.assertEqual(p.play_next("d"), {"ok": True})
+        p.mpv.command.assert_called_once_with("playlist-move", 3, 2)
+
+    def test_a_run_taken_over_elsewhere_cannot_be_reordered(self):
+        p = self.player
+        p.playing = False
+        p._yield_to("phone")
+        p.mpv.command.reset_mock()
+        self.assertEqual(p.play_next("d"), {"ok": False, "error": "the current run is playing elsewhere"})
+        p.mpv.command.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -175,7 +175,7 @@ Window {
         plPage.picked = []; plPage.choosing = false; plFind.text = ""
         loadTracks(id); loadNext(id)
     }
-    property string currentRun: st ? st.playlist + ":" + st.index : ""
+    property string currentRun: st ? st.playlist + ":" + st.index + ":" + st.orderHash : ""
     onCurrentRunChanged: if (openPlaylist) loadNext(openPlaylist)
     function artistFor(t) {
         if (!st || !t) return null
@@ -959,6 +959,10 @@ Window {
         MenuItem { contentItem: Text { text: "Play"; color: starlight; font.family: sans.name; font.pixelSize: 14 }
             background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
             onTriggered: act("/play", { playlist: trackMenu.playlist || folderOf(trackMenu.track.id), track: trackMenu.track.id }) }
+        MenuItem { visible: trackMenu.track && st && st.playNext && st.run.indexOf(trackMenu.track.id) >= 0; height: visible ? implicitHeight : 0
+            contentItem: Text { text: "Play next"; color: starlight; font.family: sans.name; font.pixelSize: 14 }
+            background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
+            onTriggered: act("/play-next", { track: trackMenu.track.id }) }
         MenuItem { contentItem: Text { text: "Add to playlist"; color: starlight; font.family: sans.name; font.pixelSize: 14 }
             background: Rectangle { color: parent.highlighted ? "#16131f" : "transparent" }
             onTriggered: { addMenu.trackIds = [trackMenu.track.id]; addMenu.popup() } }

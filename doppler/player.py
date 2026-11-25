@@ -133,6 +133,7 @@ class Player:
         self.core_idle = True                  # mpv's word for "no sound coming out" (paused, loading, buffering)
         self._heard: tuple[str, float] | None = None  # the track sounding since then, by the monotonic clock
         self._load_saved()
+        self._rename_tracks((self.hub_state or {}).get("renamed", {}))
         self.source = self._source()
         self._plays_out.update({t: list(v) for t, v in self.plays.items()})
         core.merge_listening(self._listened_out, self.listened)  # queued first, so pruning keeps what's unsent
@@ -259,6 +260,60 @@ class Player:
                 return os.path.join(root, track)
         return self.hub.file_url(track)
 
+    def _rename_tracks(self, moves: dict):
+        """Follow folder moves in everything this device saved or loaded, including unsent history."""
+        if not moves:
+            return
+        changed, queue_changed = False, False
+        position = self.position() if self.current and self.mpv.alive() else 0.0
+        paused = self.mpv.get("pause", not self.playing) if self.current and self.mpv.alive() else True
+
+        def rename(track):
+            return moves.get(track, track)
+
+        new_order = [rename(t) for t in self.order]
+        if new_order != self.order:
+            self.order, changed, queue_changed = new_order, True, True
+        for session in self.sessions.values():
+            order = [rename(t) for t in session.get("order", [])]
+            if order != session.get("order", []):
+                session["order"] = order
+                session["orderHash"] = core.order_hash(order)
+                changed = True
+        for counts in (self.plays, self.hub_plays, self._plays_out):
+            for old, new in moves.items():
+                value = counts.pop(old, None)
+                if value is not None:
+                    core.merge_plays(counts, {new: value})
+                    changed = True
+        for listened in (self.listened, self._listened_out):
+            for old, new in moves.items():
+                for month, tracks in listened.items():
+                    value = tracks.pop(old, None)
+                    if value is not None:
+                        core.merge_listening(listened, {month: {new: value}})
+                        changed = True
+        if self._heard:
+            track, since = self._heard
+            if track in moves:
+                self._heard = (rename(track), since)
+                changed = True
+        if not changed:
+            return
+        if queue_changed and self.current and self.mpv.alive():
+            try:
+                self._dir_cache.clear()
+                listing = os.path.join(self.runtime_dir, "queue.m3u")
+                with open(listing, "w") as handle:
+                    handle.write("\n".join(self.locate(t) for t in self.order) + "\n")
+                self.mpv.set("playlist-start", self.index)
+                self.mpv.set("start", f"{position:.2f}" if position > 0.5 else "none")
+                self.mpv.command("loadlist", listing, "replace")
+                self.mpv.set("pause", paused)
+            except RuntimeError:
+                pass
+        self._save()
+
     # --- talking to the hub
 
     def _report(self, claim: bool = False):
@@ -371,6 +426,7 @@ class Player:
             self.library = {t["id"]: t for t in library["tracks"]}
             self.library_rev = library["rev"]
             self._save()
+        self._rename_tracks(state.get("renamed", {}))
         active = state.get("active")
         if self.playing and active and active["device"] != self.device and active["since"] > self.claimed_at:
             self._yield_to(active["device"])

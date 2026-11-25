@@ -4,6 +4,7 @@ itself, for a device that doesn't hold a copy. No login: keep it on a private ne
 
 from __future__ import annotations
 
+import errno
 import gzip
 import json
 import mimetypes
@@ -40,12 +41,13 @@ class Hub:
         os.makedirs(data_dir, exist_ok=True)
         self.changed = threading.Condition()
         self.state = {"rev": 1, "active": None, "sessions": {}, "slots": {}, "playlists": {}, "modes": {}, "devices": {},
-                      "plays": {}, "playsRev": 0}
+                      "plays": {}, "playsRev": 0, "renamed": {}}
         try:
             with open(self.path) as handle:
                 self.state.update(json.load(handle))
         except (OSError, ValueError):
             pass
+        self.state.setdefault("renamed", {})
         self._saved_at = 0.0
         self._dirty = False
         # Listening time per device and month, {source: {month: {track: [seconds, plays]}}}. It grows by
@@ -127,6 +129,7 @@ class Hub:
                 "active": self.state["active"], "sessions": sessions, "slots": self.slots(),
                 "playlists": sorted(self.state["playlists"].values(), key=lambda p: core.natural_key(p["name"])),
                 "modes": self.state["modes"], "devices": self.state["devices"], "playsRev": self.state["playsRev"],
+                "renamed": dict(self.state["renamed"]),
                 "library": {"rev": self.library.rev if self.library else "", "count": len(self._track_ids())},
             }
 
@@ -174,6 +177,25 @@ class Hub:
 
     # --- writing
 
+    def _rename(self, track: str) -> str:
+        return self.state["renamed"].get(track, track)
+
+    def _rename_plays(self, plays: dict) -> dict:
+        out = {}
+        for track, value in plays.items():
+            core.merge_plays(out, {self._rename(str(track)): value})
+        return out
+
+    def _rename_listening(self, listened: dict) -> dict:
+        out = {}
+        for month, tracks in listened.items():
+            if not isinstance(tracks, dict):
+                continue
+            for track, value in tracks.items():
+                # Absolute per-install totals keep the larger when two aliases land together; never add them.
+                core.merge_listening(out, {month: {self._rename(str(track)): value}})
+        return out
+
     def add_plays(self, body: dict) -> dict:
         """A device's running play counts, and its listening time month by month (`listened`).
         `source` is that install's own id (not its name, so a reinstall starts a fresh tally instead
@@ -184,6 +206,9 @@ class Hub:
         if not source or not isinstance(plays, dict) or not (plays or isinstance(listened, dict)):
             return {"ok": False, "error": "source and plays are required"}
         with self.changed:
+            plays = self._rename_plays(plays)
+            if isinstance(listened, dict):
+                listened = self._rename_listening(listened)
             if core.merge_plays(self.state["plays"].setdefault(source, {}), plays):
                 self.state["playsRev"] += 1
                 self._save()
@@ -229,6 +254,8 @@ class Hub:
                 order = s["order"]
             else:
                 order = [str(t) for t in order]
+            # A player that was off (or playing) during a move can still send its old queue.
+            order = [self._rename(t) for t in order]
             index = core.clamp_index(body.get("index"), len(order))
             new = {
                 "playlist": playlist, "order": order, "orderHash": core.order_hash(order), "index": index,
@@ -264,20 +291,23 @@ class Hub:
             elif not playlist.startswith("c:"):
                 return {"ok": False, "error": "only hand-made playlists can be edited; folders are their files"}
             entry = self.state["playlists"].get(playlist, {"id": playlist, "name": "Untitled", "tracks": []})
+            entry["tracks"] = list(dict.fromkeys(self._rename(t) for t in entry["tracks"]))
             if "name" in body:
                 entry["name"] = str(body["name"]).strip()[:120] or "Untitled"
             if "tracks" in body:
                 seen, tracks = set(), []
                 for track in body["tracks"]:
+                    track = self._rename(str(track))
                     if track not in seen:
                         seen.add(track)
-                        tracks.append(str(track))
+                        tracks.append(track)
                 entry["tracks"] = tracks
             for track in body.get("add", []):
+                track = self._rename(str(track))
                 if track not in entry["tracks"]:
-                    entry["tracks"].append(str(track))
+                    entry["tracks"].append(track)
             if body.get("remove"):
-                gone = set(body["remove"])
+                gone = {self._rename(str(t)) for t in body["remove"]}
                 entry["tracks"] = [t for t in entry["tracks"] if t not in gone]
             entry["updated"] = self.clock()
             self.state["playlists"][playlist] = entry
@@ -322,6 +352,98 @@ class Hub:
             self._bump()
             self._save()
         return {"ok": True}
+
+    @staticmethod
+    def _move_file(source: str, dest: str):
+        """Move one file without ever replacing the destination, including across filesystems."""
+        try:
+            os.link(source, dest)   # atomic no-replace on the usual, same-filesystem path
+        except OSError as error:
+            if error.errno != errno.EXDEV:
+                raise
+            created = False
+            try:
+                with open(source, "rb") as src, open(dest, "xb") as dst:
+                    created = True
+                    shutil.copyfileobj(src, dst)
+                shutil.copystat(source, dest)
+            except OSError:
+                if created:
+                    os.unlink(dest)
+                raise
+        try:
+            os.unlink(source)
+        except OSError:
+            os.unlink(dest)
+            raise
+
+    def move_tracks(self, body: dict) -> dict:
+        """Adds songs to a folder-backed playlist by moving their files there. Their ids are their paths,
+        so every stored reference and their listening history follow them to the new path."""
+        tracks = body.get("tracks")
+        folder = str(body.get("folder") or "").strip()
+        if not isinstance(tracks, list) or not tracks or not self.library:
+            return {"ok": False, "error": "tracks are required"}
+        if not folder or core.folder_id(folder) not in core.folders(self.library.ids()):
+            return {"ok": False, "error": "no such folder"}
+        moved, failed = {}, 0
+        known = set(self.library.ids())
+        for old in dict.fromkeys(str(t) for t in tracks):
+            source = self.library.path(old) if old in known else None
+            new = folder + "/" + os.path.basename(old)
+            dest = os.path.realpath(os.path.join(self.library.root, new))
+            if not source or not dest.startswith(os.path.realpath(self.library.root) + os.sep):
+                failed += 1
+                continue
+            if old == new:
+                continue
+            try:
+                self._move_file(source, dest)
+                moved[old] = new
+            except OSError:
+                failed += 1
+        if moved:
+            self.library.scan(force=True)
+            with self.changed:
+                renamed = self.state["renamed"]
+                for old, new in moved.items():
+                    for earlier, current in list(renamed.items()):
+                        if current == old:
+                            renamed[earlier] = new
+                    renamed[old] = new
+                for earlier, current in list(renamed.items()):
+                    if earlier == current:
+                        del renamed[earlier]
+                for entry in self.state["playlists"].values():
+                    entry["tracks"] = list(dict.fromkeys(moved.get(t, t) for t in entry["tracks"]))
+                for session in self.state["sessions"].values():
+                    session["order"] = [moved.get(t, t) for t in session["order"]]
+                    session["orderHash"] = core.order_hash(session["order"])
+                plays_changed = False
+                for plays in self.state["plays"].values():
+                    for old, new in moved.items():
+                        value = plays.pop(old, None)
+                        if value is not None:
+                            core.merge_plays(plays, {new: value})
+                            plays_changed = True
+                if plays_changed:
+                    self.state["playsRev"] += 1
+                listening_changed = False
+                for listened in self.listening.values():
+                    for old, new in moved.items():
+                        for month, heard in listened.items():
+                            value = heard.pop(old, None)
+                            if value is not None:
+                                core.merge_listening(listened, {month: {new: value}})
+                                listening_changed = True
+                self._bump()
+                self._save()
+                if listening_changed:
+                    self._save_listening(now=True)
+        out = {"ok": not failed, "moved": moved}
+        if failed:
+            out["error"] = f"couldn't move {failed} of them; a file with the same name may already be there"
+        return out
 
     def delete_tracks(self, body: dict) -> dict:
         """Takes songs out of the library for good: the files go to the hub's trash (so a slip can be
@@ -376,7 +498,14 @@ class Hub:
 
     def library_changed(self):
         with self.changed:
+            # A new file at an alias's old path is a new song, not the one that used to be there.
+            known = set(self._track_ids())
+            stale = [old for old in self.state["renamed"] if old in known]
+            for old in stale:
+                del self.state["renamed"][old]
             self._bump()
+            if stale:
+                self._save()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -548,6 +677,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.hub.add_plays(body))
         if path == "/api/tracks/delete":
             return self._json(self.hub.delete_tracks(body))
+        if path == "/api/tracks/move":
+            return self._json(self.hub.move_tracks(body))
         if path == "/api/rescan":
             if self.hub.library.scan(force=True):
                 self.hub.library_changed()

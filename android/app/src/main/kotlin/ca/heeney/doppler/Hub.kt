@@ -54,6 +54,7 @@ data class Active(val device: String, val playlist: String, val since: Double)
 data class HubState(
     val rev: Long, val now: Double, val active: Active?, val sessions: Map<String, SessionInfo>, val slots: Map<String, String>,
     val playlists: Map<String, CustomPlaylist>, val modes: Map<String, String>, val libraryRev: String, val playsRev: Long = 0,
+    val renamed: Map<String, String> = emptyMap(),
 ) {
     companion object {
         fun from(o: JSONObject): HubState {
@@ -77,7 +78,7 @@ data class HubState(
             val active = o.optJSONObject("active")?.let { Active(it.getString("device"), it.getString("playlist"), it.getDouble("since")) }
             return HubState(o.optLong("rev"), o.optDouble("now"), active, sessions, o.optJSONObject("slots").strings(),
                 playlists, o.optJSONObject("modes").strings(), o.optJSONObject("library")?.optString("rev") ?: "",
-                o.optLong("playsRev"))
+                o.optLong("playsRev"), o.optJSONObject("renamed").strings())
         }
 
         private fun JSONObject?.strings(): Map<String, String> {

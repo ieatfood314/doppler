@@ -91,6 +91,32 @@ class Listening(private val store: Store) {
         if (plays > 0) save()
     }
 
+    /** A moved song's path id changes on the hub. Carry both saved and unsent totals to its new id. */
+    fun rename(moves: Map<String, String>): Boolean {
+        if (moves.isEmpty()) return false
+        var changed = false
+        fun fix(root: JSONObject) {
+            for (month in root.keys()) {
+                val tracks = root.optJSONObject(month) ?: continue
+                for ((old, new) in moves) {
+                    val value = tracks.optJSONArray(old) ?: continue
+                    tracks.remove(old)
+                    val other = tracks.optJSONArray(new)
+                    tracks.put(new, if (other == null) value else JSONArray()
+                        .put(maxOf(value.optDouble(0), other.optDouble(0))).put(maxOf(value.optInt(1), other.optInt(1))))
+                    changed = true
+                }
+            }
+        }
+        fix(mine)
+        fix(out)
+        heard?.let { (track, since) ->
+            moves[track]?.let { heard = it to since; changed = true }
+        }
+        if (changed) save()
+        return changed
+    }
+
     /** Whether there's time to send: with a pause, or every few minutes while playing. */
     fun due(playing: Boolean) = out.length() > 0 && (!playing || SystemClock.elapsedRealtime() - sentAt >= SEND_EVERY_MS)
     fun waiting() = out.length() > 0

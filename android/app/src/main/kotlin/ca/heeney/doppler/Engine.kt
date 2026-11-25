@@ -249,6 +249,7 @@ class Engine private constructor(private val context: Context) {
         library = lib
         hubState = store.loadHubState()
         current?.let { c -> sessions[c]?.let { order = it.order } }
+        renameTracks(hubState?.renamed ?: emptyMap(), queue = false)
         context.getSystemService(AudioManager::class.java)?.registerAudioDeviceCallback(object : AudioDeviceCallback() {
             override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) = routeChanged()
             override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) = routeChanged()
@@ -491,6 +492,7 @@ class Engine private constructor(private val context: Context) {
             library = lib
             refreshLocal()
         }
+        renameTracks(state.renamed)
         val active = state.active
         if (playing && active != null && active.device != store.device && active.since > claimedAt) yieldTo(active.device)
         if (state.playsRev != hubPlaysRev && uiVisible > 0) fetchPlays()
@@ -608,6 +610,64 @@ class Engine private constructor(private val context: Context) {
     fun localForArt(uri: Uri): Uri? = uri.path?.substringAfter("/art/", "")?.takeIf { it.isNotEmpty() }?.let { local[it] }
     fun isLocal(id: String) = id in local
     fun localUri(id: String): Uri? = local[id]
+
+    /** Folder moves change path ids. Keep this phone's loaded and saved world on the same ids as the hub. */
+    private fun renameTracks(moves: Map<String, String>, queue: Boolean = true) {
+        if (moves.isEmpty()) return
+        var changed = false
+        fun renamed(id: String) = moves[id] ?: id
+        val newOrder = order.map(::renamed)
+        if (newOrder != order) { order = newOrder; changed = true }
+        for ((key, session) in sessions.toList()) {
+            val tracks = session.order.map(::renamed)
+            if (tracks != session.order) { sessions[key] = session.copy(order = tracks); changed = true }
+        }
+        fun fixPlays(counts: MutableMap<String, Play>): Boolean {
+            var different = false
+            for ((old, new) in moves) {
+                val value = counts.remove(old) ?: continue
+                Core.mergePlays(counts, mapOf(new to value))
+                different = true
+            }
+            return different
+        }
+        if (fixPlays(plays)) { store.savePlays("plays.json", plays); changed = true }
+        if (fixPlays(playsOut)) { store.savePlays("plays-out.json", playsOut); changed = true }
+        if (fixPlays(hubPlays)) { store.savePlays("plays-hub.json", hubPlays); changed = true }
+        if (listening.rename(moves)) changed = true
+        listenTrack?.let { listenTrack = renamed(it) }
+        retried?.let { retried = renamed(it) }
+        askSpeaker?.let { p -> p.track?.let { askSpeaker = p.copy(track = renamed(it)) } }
+        if (local.keys.any { it in moves }) {
+            val found = local.toMutableMap()
+            for ((old, new) in moves) {
+                val uri = local[old] ?: continue
+                if (new !in local) found[new] = uri
+                found.remove(old)
+            }
+            local = found
+        }
+        if (queue && player.mediaItemCount > 0) {
+            val at = player.currentMediaItemIndex
+            val position = player.currentPosition
+            var replaced = false
+            for (i in 0 until player.mediaItemCount) {
+                val old = player.getMediaItemAt(i).mediaId
+                val new = moves[old] ?: continue
+                player.replaceMediaItem(i, item(new))
+                replaced = true
+            }
+            if (replaced) {
+                player.seekTo(at, position)
+                if (player.playbackState == Player.STATE_IDLE) player.prepare()
+                changed = true
+            }
+        }
+        if (changed) {
+            store.saveSessions(sessions)
+            playsRev++
+        }
+    }
 
     /** Everyone's count, or this phone's own when the hub hasn't heard it yet. */
     fun playsOf(id: String): Play = maxOf(hubPlays[id] ?: Play.NONE, plays[id] ?: Play.NONE)
@@ -1092,12 +1152,18 @@ class Engine private constructor(private val context: Context) {
 
     // ---------- playlists, slots and modes (all live on the hub)
 
-    fun hubEdit(method: String, path: String, body: JSONObject?, then: (JSONObject?) -> Unit = {}) {
+    fun hubEdit(method: String, path: String, body: JSONObject?, onError: (String) -> Unit = {}, then: (JSONObject?) -> Unit = {}) {
         scope.launch {
             val r = withContext(Dispatchers.IO) { runCatching { hub.json(method, path, body) }.getOrNull() }
-            if (r == null) {
-                say(if (Net.free) "Can't reach the hub, so that wasn't saved" else "Off Wi-Fi, so that wasn't saved")
+            val error = when {
+                r == null -> if (Net.free) "Can't reach the hub, so that wasn't saved" else "Off Wi-Fi, so that wasn't saved"
+                !r.optBoolean("ok", true) -> r.optString("error").ifEmpty { "That wasn't saved" }
+                else -> ""
+            }
+            if (error.isNotEmpty()) {
+                say(error)
                 publish()
+                onError(error)
             }
             refresh()
             then(r)

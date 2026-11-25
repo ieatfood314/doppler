@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -404,6 +405,8 @@ private fun DrawScope.drawPrev(c: Color) {
 private fun Library(engine: Engine, state: UiState, open: (Screen) -> Unit, back: () -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }
     var naming by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    var saveError by remember { mutableStateOf("") }
     val q = query.trim().lowercase()
     val matches = remember(q, state.libraryCount) {
         if (q.length < 2) emptyList() else engine.library.values.filter {
@@ -459,10 +462,15 @@ private fun Library(engine: Engine, state: UiState, open: (Screen) -> Unit, back
             }
         }
     }
-    if (naming) NameDialog("New playlist", "", "Make it", { naming = false }) { name ->
-        naming = false
-        engine.hubEdit("POST", "/api/playlists", JSONObject().put("name", name).put("tracks", JSONArray())) { r ->
-            r?.optJSONObject("playlist")?.optString("id")?.let { open(Screen.Playlist(it)) }
+    if (naming) NameDialog("New playlist", "", "Make it", { if (!saving) naming = false }, saving, saveError) { name ->
+        saving = true
+        saveError = ""
+        engine.hubEdit("POST", "/api/playlists", JSONObject().put("name", name).put("tracks", JSONArray()), onError = { saveError = it }) { r ->
+            saving = false
+            if (r?.optBoolean("ok") == true) {
+                naming = false
+                r.optJSONObject("playlist")?.optString("id")?.let { open(Screen.Playlist(it)) }
+            }
         }
     }
     acting?.let { TrackMenu(engine, state, it, null, open) { acting = null } }
@@ -1047,23 +1055,48 @@ private fun TrackRow(engine: Engine, t: Track, current: Boolean, selected: Boole
 @Composable
 private fun AddDialog(engine: Engine, state: UiState, tracks: List<String>, dismiss: () -> Unit, done: () -> Unit) {
     var naming by remember { mutableStateOf(false) }
+    var moving by remember { mutableStateOf<PlaylistView?>(null) }
+    var saving by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+    fun save(method: String, path: String, body: JSONObject) {
+        saving = true
+        error = ""
+        engine.hubEdit(method, path, body, onError = { error = it }) { r ->
+            saving = false
+            if (r?.optBoolean("ok") == true) done()
+        }
+    }
     if (naming) {
-        NameDialog("New playlist", "", "Make it", dismiss) { name ->
-            engine.hubEdit("POST", "/api/playlists", JSONObject().put("name", name).put("tracks", JSONArray(tracks)))
-            done()
+        NameDialog("New playlist", "", "Make it", { if (!saving) dismiss() }, saving, error) { name ->
+            save("POST", "/api/playlists", JSONObject().put("name", name).put("tracks", JSONArray(tracks)))
         }
         return
     }
-    Sheet(dismiss) {
+    val folders = state.playlists.filter { it.kind == "folder" && it.path.isNotEmpty() }
+    Sheet({ if (!saving) dismiss() }) {
         Text("Add ${tracks.size} to", color = Palette.Starlight, size = 22, family = Type.Display, modifier = Modifier.padding(bottom = 10.dp))
-        for (c in state.customs) {
-            Text(c.name, Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
-                engine.hubEdit("PUT", "/api/playlists/${c.id}", JSONObject().put("add", JSONArray(tracks)))
-                done()
-            }.padding(vertical = 12.dp), color = Palette.Starlight, size = 16)
+        Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+            for (c in state.customs) {
+                Text(c.name, Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(enabled = !saving) {
+                    save("PUT", "/api/playlists/${c.id}", JSONObject().put("add", JSONArray(tracks)))
+                }.padding(vertical = 12.dp), color = Palette.Starlight, size = 16)
+            }
+            for (folder in folders) {
+                Text(folder.path, Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                    .clickable(enabled = !saving) { moving = folder }.padding(vertical = 12.dp), color = Palette.Starlight, size = 16)
+            }
         }
-        Text("A new playlist", Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { naming = true }.padding(vertical = 12.dp),
-            color = Palette.Dust, size = 16, weight = FontWeight.Medium)
+        if (error.isNotEmpty()) Text(error, color = Palette.Red, size = 14, modifier = Modifier.padding(top = 12.dp))
+        Text("A new playlist", Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = !saving) { naming = true }.padding(vertical = 12.dp), color = Palette.Dust, size = 16, weight = FontWeight.Medium)
+    }
+    moving?.let { folder ->
+        val one = tracks.size == 1
+        Ask(if (one) "Move this song to ${folder.name}?" else "Move ${tracks.size} songs to ${folder.name}?",
+            (if (one) "Its file moves into " else "Their files move into ") + "${folder.path} on the hub.", "Move", { moving = null }) {
+            moving = null
+            save("POST", "/api/tracks/move", JSONObject().put("folder", folder.path).put("tracks", JSONArray(tracks)))
+        }
     }
 }
 
@@ -1336,14 +1369,16 @@ private fun Ask(title: String, body: String, ok: String, dismiss: () -> Unit, ca
 }
 
 @Composable
-private fun NameDialog(title: String, start: String, ok: String, dismiss: () -> Unit, done: (String) -> Unit) {
+private fun NameDialog(title: String, start: String, ok: String, dismiss: () -> Unit, busy: Boolean = false, error: String = "",
+                       done: (String) -> Unit) {
     var name by remember { mutableStateOf(start) }
-    Sheet(dismiss) {
+    Sheet({ if (!busy) dismiss() }) {
         Text(title, color = Palette.Starlight, size = 24, family = Type.Display, modifier = Modifier.padding(bottom = 14.dp))
-        Field(name, { name = it }, "A name")
+        Field(name, { if (!busy) name = it }, "A name")
+        if (error.isNotEmpty()) Text(error, color = Palette.Red, size = 14, modifier = Modifier.padding(top = 12.dp))
         Row(Modifier.fillMaxWidth().padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
-            Pill("Cancel", onClick = dismiss)
-            Pill(ok, true) { if (name.isNotBlank()) done(name.trim()) }
+            Pill("Cancel", onClick = { if (!busy) dismiss() })
+            Pill(if (busy) "Saving…" else ok, true) { if (!busy && name.isNotBlank()) done(name.trim()) }
         }
     }
 }

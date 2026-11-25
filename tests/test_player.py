@@ -100,6 +100,22 @@ class Counting(unittest.TestCase):
         views = {v["id"]: v for v in again.tracks_view("f:1")}
         self.assertEqual((views["1/a.flac"]["plays"], views["1/b.flac"]["plays"]), (1, 0))
 
+    def test_saved_queue_and_unsent_history_follow_a_folder_move(self):
+        from doppler import core
+        p = self.player
+        p.sessions["f:1"] = {"order": p.order, "index": 0, "position": 20.0}
+        p.plays = {"1/a.flac": [3, 100.0]}
+        p.listened = {"2026-11": {"1/a.flac": [90.0, 1]}}
+        p.hub_state = {"renamed": {"1/a.flac": "2/a.flac"}}
+        p._save()
+        again = Player(p.config, self.dir.name + "/state", self.dir.name + "/run")
+        self.assertEqual(again.order, ["2/a.flac", "1/b.flac"])
+        self.assertEqual(again.sessions["f:1"]["orderHash"], core.order_hash(again.order))
+        self.assertEqual(again.plays, {"2/a.flac": [3, 100.0]})
+        self.assertEqual(again._plays_out, again.plays)
+        self.assertEqual(again.listened, {"2026-11": {"2/a.flac": [90.0, 1]}})
+        self.assertEqual(again._listened_out, again.listened)
+
 
 class PlayNext(unittest.TestCase):
     def setUp(self):

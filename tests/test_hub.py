@@ -186,6 +186,138 @@ class Playlists(unittest.TestCase):
         self.assertFalse(self.hub.set_mode({"playlist": "f:Album", "mode": "sideways"})["ok"])
 
 
+class MoveTracks(unittest.TestCase):
+    def setUp(self):
+        import os
+        from doppler.library import Library
+        self.dir = tempfile.TemporaryDirectory()
+        self.music = os.path.join(self.dir.name, "music")
+        for folder in ("1", "2"):
+            os.makedirs(os.path.join(self.music, folder))
+        for track in ("1/a.mp3", "2/x.mp3"):
+            with open(os.path.join(self.music, track), "wb") as handle:
+                handle.write(track.encode())
+        self.library = Library(self.music, os.path.join(self.dir.name, "cache"))
+        self.library.scan(force=True)
+        self.hub = Hub(os.path.join(self.dir.name, "data"), self.library)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_moving_a_song_puts_it_in_a_folder_and_keeps_its_history(self):
+        import os
+        made = self.hub.put_playlist(None, {"name": "Mix", "tracks": ["2/x.mp3"]})["playlist"]
+        report(self.hub, "phone", "f:2", claim=True, order=["2/x.mp3"])
+        self.hub.add_plays({"source": "phone", "plays": {"2/x.mp3": [3, 100]},
+                            "listened": {"2026-11": {"2/x.mp3": [120, 1]}}})
+        reply = self.hub.move_tracks({"folder": "1", "tracks": ["2/x.mp3"]})
+        self.assertEqual(reply, {"ok": True, "moved": {"2/x.mp3": "1/x.mp3"}})
+        self.assertFalse(os.path.exists(os.path.join(self.music, "2/x.mp3")))
+        self.assertTrue(os.path.exists(os.path.join(self.music, "1/x.mp3")))
+        self.assertEqual(self.hub.state["playlists"][made["id"]]["tracks"], ["1/x.mp3"])
+        self.assertEqual(self.hub.state["sessions"]["f:2"]["order"], ["1/x.mp3"])
+        self.assertEqual(self.hub.state["plays"]["phone"], {"1/x.mp3": [3, 100]})
+        self.assertEqual(self.hub.listening["phone"]["2026-11"], {"1/x.mp3": [120, 1]})
+        self.assertIn("1/x.mp3", self.library.ids())
+        self.assertEqual(self.hub.public()["renamed"], {"2/x.mp3": "1/x.mp3"})
+
+    def test_late_reports_and_counts_follow_the_new_path_without_double_counting(self):
+        made = self.hub.put_playlist(None, {"name": "Mix", "tracks": ["2/x.mp3"]})["playlist"]
+        report(self.hub, "phone", "f:2", claim=True, order=["2/x.mp3"])
+        self.hub.add_plays({"source": "phone", "plays": {"2/x.mp3": [3, 100]},
+                            "listened": {"2026-11": {"2/x.mp3": [120, 1]}}})
+        self.hub.move_tracks({"folder": "1", "tracks": ["2/x.mp3"]})
+        reply = report(self.hub, "phone", "f:2", order=["2/x.mp3"], orderHash="stale")
+        self.assertTrue(reply["ok"])
+        self.assertEqual(self.hub.state["sessions"]["f:2"]["order"], ["1/x.mp3"])
+        self.hub.add_plays({"source": "phone", "plays": {"2/x.mp3": [4, 110]},
+                            "listened": {"2026-11": {"2/x.mp3": [150, 1]}}})
+        self.assertEqual(self.hub.state["plays"]["phone"], {"1/x.mp3": [4, 110]})
+        self.assertEqual(self.hub.listening["phone"]["2026-11"], {"1/x.mp3": [150.0, 1]})
+        self.assertEqual(self.hub.state["playlists"][made["id"]]["tracks"], ["1/x.mp3"])
+        self.hub.put_playlist(made["id"], {"add": ["2/x.mp3"]})
+        self.assertEqual(self.hub.state["playlists"][made["id"]]["tracks"], ["1/x.mp3"])
+        other = self.hub.put_playlist(None, {"name": "Other", "tracks": ["2/x.mp3"]})["playlist"]
+        self.assertEqual(other["tracks"], ["1/x.mp3"])
+        self.hub.put_playlist(other["id"], {"remove": ["2/x.mp3"]})
+        self.assertEqual(self.hub.state["playlists"][other["id"]]["tracks"], [])
+
+    def test_a_second_move_collapses_aliases_and_an_old_path_can_be_reused(self):
+        import os
+        with open(os.path.join(self.music, "2/keep.mp3"), "wb") as handle:
+            handle.write(b"keep folder 2")
+        self.library.scan(force=True)
+        self.hub.move_tracks({"folder": "1", "tracks": ["2/x.mp3"]})
+        self.hub.move_tracks({"folder": "2", "tracks": ["1/x.mp3"]})
+        self.assertEqual(self.hub.public()["renamed"], {"1/x.mp3": "2/x.mp3"})
+        self.hub.move_tracks({"folder": "1", "tracks": ["2/x.mp3"]})
+        with open(os.path.join(self.music, "2/x.mp3"), "wb") as handle:
+            handle.write(b"different song")
+        self.library.scan(force=True)
+        self.hub.library_changed()
+        self.assertEqual(self.hub.public()["renamed"], {})
+
+    def test_moving_never_overwrites_or_leaves_the_library(self):
+        import os
+        with open(os.path.join(self.music, "1/x.mp3"), "wb") as handle:
+            handle.write(b"already here")
+        reply = self.hub.move_tracks({"folder": "1", "tracks": ["2/x.mp3"]})
+        self.assertFalse(reply["ok"])
+        with open(os.path.join(self.music, "1/x.mp3"), "rb") as handle:
+            self.assertEqual(handle.read(), b"already here")
+        self.assertTrue(os.path.exists(os.path.join(self.music, "2/x.mp3")))
+        self.assertFalse(self.hub.move_tracks({"folder": "../", "tracks": ["2/x.mp3"]})["ok"])
+        self.assertFalse(self.hub.move_tracks({"folder": "1", "tracks": ["2/./x.mp3"]})["ok"])
+
+    def test_cross_filesystem_moves_copy_exclusively_and_clean_up_failures(self):
+        import errno
+        import os
+        from unittest import mock
+        with mock.patch("doppler.hub.os.link", side_effect=OSError(errno.EXDEV, "different mount")):
+            reply = self.hub.move_tracks({"folder": "1", "tracks": ["2/x.mp3"]})
+        self.assertTrue(reply["ok"])
+        with open(os.path.join(self.music, "1/x.mp3"), "rb") as handle:
+            self.assertEqual(handle.read(), b"2/x.mp3")
+        with open(os.path.join(self.music, "2/y.mp3"), "wb") as handle:
+            handle.write(b"do not lose this")
+        self.library.scan(force=True)
+        with mock.patch("doppler.hub.os.link", side_effect=OSError(errno.EXDEV, "different mount")), \
+                mock.patch("doppler.hub.shutil.copyfileobj", side_effect=OSError("disk full")):
+            reply = self.hub.move_tracks({"folder": "1", "tracks": ["2/y.mp3"]})
+        self.assertFalse(reply["ok"])
+        self.assertTrue(os.path.exists(os.path.join(self.music, "2/y.mp3")))
+        self.assertFalse(os.path.exists(os.path.join(self.music, "1/y.mp3")))
+
+    def test_two_racing_moves_cannot_replace_each_other(self):
+        import os
+        os.makedirs(os.path.join(self.music, "3"))
+        for folder in ("2", "3"):
+            with open(os.path.join(self.music, folder, "same.mp3"), "wb") as handle:
+                handle.write(folder.encode())
+        self.library.scan(force=True)
+        start = threading.Barrier(3)
+        def move(folder):
+            start.wait()
+            return self.hub.move_tracks({"folder": "1", "tracks": [f"{folder}/same.mp3"]})
+        results = []
+        lock = threading.Lock()
+        def collect(folder):
+            result = move(folder)
+            with lock:
+                results.append(result)
+        threads = [threading.Thread(target=collect, args=(folder,)) for folder in ("2", "3")]
+        for thread in threads:
+            thread.start()
+        start.wait()
+        for thread in threads:
+            thread.join(5)
+        self.assertEqual(sorted(r["ok"] for r in results), [False, True])
+        with open(os.path.join(self.music, "1/same.mp3"), "rb") as handle:
+            self.assertIn(handle.read(), (b"2", b"3"))
+        remaining = [folder for folder in ("2", "3") if os.path.exists(os.path.join(self.music, folder, "same.mp3"))]
+        self.assertEqual(len(remaining), 1)
+
+
 class DeleteTracks(unittest.TestCase):
     def setUp(self):
         import os
